@@ -138,5 +138,5 @@ current Mac when it needs a development profile for the archive phase; set
 - Promotional text: Monitor Claude Code, Codex, Gemini CLI, Qwen Code, Hermes, and compatible hook-driven agent sessions from a native macOS menu bar utility.
 - Description: Ping Island brings AI coding session status, approval prompts, follow-up questions, remote SSH activity, and completion notifications into a compact macOS menu bar surface. It supports Claude Code, Codex, Gemini CLI, Qwen Code, Hermes Agent, and compatible hook-driven clients, with mascot-rich status views, terminal jump-back, and docked or detached modes.
 - Keywords: Claude Code, Codex, Gemini CLI, AI coding, menu bar, developer tools
-- Support URL: https://github.com/erha19/ping-island/issues
-- Privacy policy URL: https://github.com/erha19/ping-island/blob/main/docs/privacy-policy.md
+- Support URL: https://github.com/QianLongGit/ping-island/issues
+- Privacy policy URL: https://github.com/QianLongGit/ping-island/blob/main/docs/privacy-policy.md

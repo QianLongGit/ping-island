@@ -69,6 +69,9 @@ struct SessionClientInfo: Codable, Equatable, Sendable {
     var iTermSessionIdentifier: String?
     var tmuxSessionIdentifier: String?
     var tmuxPaneIdentifier: String?
+    // Warp pane UUID（32 位大写十六进制，Task N2a）：本地/远程
+    // bridge hook 进程内解析后贯穿；N2b focuser 以此为跳转锚点
+    var warpPaneIdentifier: String?
     var processName: String?
 
     nonisolated init(
@@ -91,6 +94,7 @@ struct SessionClientInfo: Codable, Equatable, Sendable {
         iTermSessionIdentifier: String? = nil,
         tmuxSessionIdentifier: String? = nil,
         tmuxPaneIdentifier: String? = nil,
+        warpPaneIdentifier: String? = nil,
         processName: String? = nil
     ) {
         self.kind = kind
@@ -112,6 +116,7 @@ struct SessionClientInfo: Codable, Equatable, Sendable {
         self.iTermSessionIdentifier = iTermSessionIdentifier?.nonEmpty
         self.tmuxSessionIdentifier = tmuxSessionIdentifier?.nonEmpty
         self.tmuxPaneIdentifier = tmuxPaneIdentifier?.nonEmpty
+        self.warpPaneIdentifier = warpPaneIdentifier?.nonEmpty
         self.processName = processName?.nonEmpty
     }
 

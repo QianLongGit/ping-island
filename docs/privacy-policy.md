@@ -89,4 +89,4 @@ Simple Log Service to store product usage events. See
 
 For privacy questions or support, open an issue at:
 
-https://github.com/erha19/ping-island/issues
+https://github.com/QianLongGit/ping-island/issues

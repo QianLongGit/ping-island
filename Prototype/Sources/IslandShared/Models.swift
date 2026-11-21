@@ -55,6 +55,9 @@ public struct TerminalContext: Codable, Equatable, Hashable, Sendable {
     public var remoteHost: String?
     public var tmuxSession: String?
     public var tmuxPane: String?
+    // Warp pane UUID（32 位大写十六进制）：bridge hook 进程内经
+    // 进程爬链 + SQLite 解析后填入（Task N2a）。非 Warp 环境恒 nil。
+    public var warpPaneUUID: String?
 
     public init(
         terminalProgram: String? = nil,
@@ -68,7 +71,8 @@ public struct TerminalContext: Codable, Equatable, Hashable, Sendable {
         transport: String? = nil,
         remoteHost: String? = nil,
         tmuxSession: String? = nil,
-        tmuxPane: String? = nil
+        tmuxPane: String? = nil,
+        warpPaneUUID: String? = nil
     ) {
         self.terminalProgram = terminalProgram
         self.terminalBundleID = terminalBundleID
@@ -82,6 +86,7 @@ public struct TerminalContext: Codable, Equatable, Hashable, Sendable {
         self.remoteHost = remoteHost
         self.tmuxSession = tmuxSession
         self.tmuxPane = tmuxPane
+        self.warpPaneUUID = warpPaneUUID
     }
 }
 

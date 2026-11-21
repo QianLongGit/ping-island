@@ -2,7 +2,7 @@ import Foundation
 @testable import IslandApp
 import Testing
 
-private let repositoryURL = "https://github.com/erha19/ping-island"
+private let repositoryURL = "https://github.com/QianLongGit/ping-island"
 
 @Test
 func installerWritesVSCodeCompatibleExtensionPayload() throws {

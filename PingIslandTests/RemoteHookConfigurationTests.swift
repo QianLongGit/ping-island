@@ -294,6 +294,110 @@ final class RemoteHookConfigurationTests: XCTestCase {
         XCTAssertNil(acknowledgement?["decision"])
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // 远程 kero session 标识贯穿（kero 集成 Task 5）
+    //
+    // 远端 bridge 以 camelCase key 编码 clientInfo（两侧 struct 均为
+    // 合成 CodingKeys），App 侧解码后经 RemoteConnectorManager 直传
+    // 重建 SessionClientInfo。此测试锁定：终端 bundle 标识（sh.kero /
+    // sh.kero.dev）从 wire 到 SessionClientInfo 全程不丢——远程会话
+    // 点击路由（Task 6）依赖该字段识别 kero 终端。
+    // ─────────────────────────────────────────────────────────────
+    func testRemoteHookEventPayloadCarriesKeroTerminalBundleIdentifier() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "requestID": UUID().uuidString, "sessionID": "remote-kero-9", "cwd": "/remote/work",
+            "event": "UserPromptSubmit", "status": "working", "provider": "claude",
+            "expectsResponse": false,
+            "clientInfo": [
+                "kind": "claudeCode",
+                "transport": "ssh",
+                "remoteHost": "devbox.example",
+                "terminalBundleIdentifier": "sh.kero.dev",
+                "terminalProgram": "kero"
+            ]
+        ])
+
+        let payload = try JSONDecoder().decode(RemoteHookEventPayload.self, from: data)
+        XCTAssertEqual(payload.clientInfo.terminalBundleIdentifier, "sh.kero.dev")
+        XCTAssertEqual(payload.clientInfo.terminalProgram, "kero")
+
+        // 重建路径等价物：RemoteConnectorManager 收到事件后按解码值直传构造
+        let clientInfo = SessionClientInfo(
+            kind: .claudeCode,
+            transport: payload.clientInfo.transport,
+            remoteHost: payload.clientInfo.remoteHost,
+            terminalBundleIdentifier: payload.clientInfo.terminalBundleIdentifier,
+            terminalProgram: payload.clientInfo.terminalProgram
+        )
+        XCTAssertEqual(clientInfo.terminalBundleIdentifier, "sh.kero.dev")
+        XCTAssertEqual(clientInfo.terminalProgram, "kero")
+        XCTAssertEqual(clientInfo.remoteHost, "devbox.example")
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 远程 Warp pane UUID 贯穿（终端扩充 Task N2a）
+    //
+    // 远端 bridge 解析出 Warp pane UUID 后以 camelCase key
+    // warpPaneUUID 编码进 clientInfo；App 侧解码后经
+    // RemoteConnectorManager 直传重建 SessionClientInfo
+    // .warpPaneIdentifier（N2b focuser 跳转的目标 pane 锚点）。
+    // 此测试锁定 wire → 解码 → 重建全程不丢。
+    // ─────────────────────────────────────────────────────────────
+    func testRemoteHookEventPayloadCarriesWarpPaneIdentifier() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "requestID": UUID().uuidString, "sessionID": "remote-warp-1", "cwd": "/remote/work",
+            "event": "UserPromptSubmit", "status": "working", "provider": "claude",
+            "expectsResponse": false,
+            "clientInfo": [
+                "kind": "claudeCode",
+                "transport": "ssh",
+                "remoteHost": "devbox.example",
+                "terminalBundleIdentifier": "dev.warp.Warp-Stable",
+                "terminalProgram": "WarpTerminal",
+                "warpPaneUUID": "AABBCCDDAABBCCDDAABBCCDDAABBCCDD"
+            ]
+        ])
+
+        let payload = try JSONDecoder().decode(RemoteHookEventPayload.self, from: data)
+        XCTAssertEqual(payload.clientInfo.warpPaneUUID, "AABBCCDDAABBCCDDAABBCCDDAABBCCDD")
+        XCTAssertEqual(payload.clientInfo.terminalBundleIdentifier, "dev.warp.Warp-Stable")
+
+        // 重建路径等价物：RemoteConnectorManager 收到事件后按解码值直传构造
+        let clientInfo = SessionClientInfo(
+            kind: .claudeCode,
+            transport: payload.clientInfo.transport,
+            remoteHost: payload.clientInfo.remoteHost,
+            terminalBundleIdentifier: payload.clientInfo.terminalBundleIdentifier,
+            terminalProgram: payload.clientInfo.terminalProgram,
+            warpPaneIdentifier: payload.clientInfo.warpPaneUUID
+        )
+        XCTAssertEqual(clientInfo.warpPaneIdentifier, "AABBCCDDAABBCCDDAABBCCDDAABBCCDD")
+    }
+
+    func testRemoteHookEventPayloadWithoutWarpUUIDDecodesToNil() throws {
+        // 旧远端 bridge 无 warpPaneUUID 字段：可选解码得 nil，
+        // 重建后 SessionClientInfo.warpPaneIdentifier 亦为 nil
+        let data = try JSONSerialization.data(withJSONObject: [
+            "requestID": UUID().uuidString, "sessionID": "remote-warp-2", "cwd": "/remote/work",
+            "event": "UserPromptSubmit", "status": "working", "provider": "claude",
+            "expectsResponse": false,
+            "clientInfo": [
+                "kind": "claudeCode",
+                "terminalProgram": "WarpTerminal"
+            ]
+        ])
+
+        let payload = try JSONDecoder().decode(RemoteHookEventPayload.self, from: data)
+        XCTAssertNil(payload.clientInfo.warpPaneUUID)
+
+        let clientInfo = SessionClientInfo(
+            kind: .claudeCode,
+            terminalProgram: payload.clientInfo.terminalProgram,
+            warpPaneIdentifier: payload.clientInfo.warpPaneUUID
+        )
+        XCTAssertNil(clientInfo.warpPaneIdentifier)
+    }
+
     func testRemoteCodexUsageMessageRoundTripsSnapshot() throws {
         let snapshot = CodexUsageSnapshot(
             sourceFilePath: "/root/.codex/sessions/rollout.jsonl",

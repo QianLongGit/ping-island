@@ -57,6 +57,25 @@ actor SessionLauncher {
             return true
         }
 
+        // ============================================================
+        // kero 远程会话直跳：kero 的远程传输发生在 daemon 内部，本机
+        // 没有 ssh 载体进程，下方 activateRemoteCarrierTerminal 的
+        // 载体猎取对 kero 必然落空。命中 kero bundle 双变体时改走
+        // focusKeroSession（kero://focus URL scheme，kero 侧按远程
+        // session 级联激活窗口），无条件提前返回；非 kero 远程会话
+        // 行为零改动，照旧落入载体猎取瀑布。
+        // ============================================================
+        if session.isRemoteSession,
+           let terminalBundleIdentifier = session.clientInfo.terminalBundleIdentifier,
+           TerminalSessionFocuser.keroIsHandledBundleIdentifier(terminalBundleIdentifier) {
+            let focused = await TerminalSessionFocuser.shared.focusKeroSession(sessionId: session.sessionId)
+            Self.logger.debug("Activated remote kero session \(session.sessionId, privacy: .public) via URL scheme jump focused=\(focused)")
+            await FocusDiagnosticsStore.shared.record(
+                "SessionLauncher remote-kero jump session=\(session.sessionId) bundle=\(terminalBundleIdentifier) success=\(focused)"
+            )
+            return focused
+        }
+
         if session.isRemoteSession,
            await activateRemoteCarrierTerminal(session) {
             Self.logger.debug("Activated remote carrier terminal for session \(session.sessionId, privacy: .public)")

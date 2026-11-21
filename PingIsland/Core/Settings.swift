@@ -452,6 +452,7 @@ final class AppSettingsStore: ObservableObject {
         static let openSessionListShortcut = "openSessionListShortcut"
         static let openSessionListShortcutDisabled = "openSessionListShortcutDisabled"
         static let routePromptsToTerminal = "routePromptsToTerminal"
+        static let terminalTextSendingEnabled = "terminalTextSendingEnabled"
         static let autoRoutePromptsToTerminalWhenIdleEnabled = "autoRoutePromptsToTerminalWhenIdleEnabled"
         static let autoRoutePromptsIdleDelay = "autoRoutePromptsIdleDelay"
         static let hookDebugLoggingEnabled = "hookDebugLoggingEnabled"
@@ -1018,6 +1019,20 @@ final class AppSettingsStore: ObservableObject {
             defaults.set(routePromptsToTerminal, forKey: Keys.routePromptsToTerminal)
             recordTelemetrySettingChange(key: Keys.routePromptsToTerminal, value: routePromptsToTerminal.description)
             writeEffectiveBridgeRuntimeConfig()
+        }
+    }
+
+    /// 终端文本注入总开关（TerminalTextSender 通道 gate）——默认 false，
+    /// 用户显式开启前 UI 不得向任何终端投递文本。纯 App 侧行为，
+    /// 不涉及 hook 侧，故无需同步 bridge runtime config。
+    @Published var terminalTextSendingEnabled: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            defaults.set(terminalTextSendingEnabled, forKey: Keys.terminalTextSendingEnabled)
+            recordTelemetrySettingChange(
+                key: Keys.terminalTextSendingEnabled,
+                value: terminalTextSendingEnabled.description
+            )
         }
     }
 
@@ -1665,6 +1680,12 @@ final class AppSettingsStore: ObservableObject {
             default: false
         )
         _routePromptsToTerminal = Published(initialValue: routePromptsToTerminal)
+        _terminalTextSendingEnabled = Published(initialValue: Self.boolValue(
+            from: defaults,
+            key: Keys.terminalTextSendingEnabled,
+            exists: persistedKeys.contains(Keys.terminalTextSendingEnabled),
+            default: false
+        ))
         _autoRoutePromptsToTerminalWhenIdleEnabled = Published(initialValue: Self.boolValue(
             from: defaults,
             key: Keys.autoRoutePromptsToTerminalWhenIdleEnabled,

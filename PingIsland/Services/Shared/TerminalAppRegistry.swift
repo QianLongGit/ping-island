@@ -20,7 +20,14 @@ struct TerminalAppRegistry: Sendable {
         "net.kovidgoyal.kitty": "kitty",
         "co.zeit.hyper": "Hyper",
         "dev.warp.warp-stable": "Warp",
-        "com.github.wez.wezterm": "WezTerm"
+        "com.github.wez.wezterm": "WezTerm",
+        // ============================================================ //
+        //  kero：双 bundle 变体（release / dev 构建保真 .dev 后缀）
+        // ============================================================ //
+        "sh.kero": "kero",
+        "sh.kero.dev": "kero (dev)",
+        // Kaku：WezTerm 家族终端（tw93 fork），单一 bundle
+        "fun.tw93.kaku": "Kaku"
     ]
 
     private nonisolated static let terminalBundleIdentifiersByProgram: [String: String] = [
@@ -38,7 +45,11 @@ struct TerminalAppRegistry: Sendable {
         "warp": "dev.warp.Warp-Stable",
         "warpterminal": "dev.warp.Warp-Stable",
         "wezterm": "com.github.wez.wezterm",
-        "wezterm-gui": "com.github.wez.wezterm"
+        "wezterm-gui": "com.github.wez.wezterm",
+        // kero 主推断指向 release bundle；dev 变体经 isTerminalBundle 匹配面覆盖
+        "kero": "sh.kero",
+        // Kaku fork 后 TERM_PROGRAM 报 "kaku"，推断回指其 bundle
+        "kaku": "fun.tw93.kaku"
     ]
 
     nonisolated static let ideBundleIdentifiers: Set<String> = [
@@ -86,6 +97,8 @@ struct TerminalAppRegistry: Sendable {
         "Hyper",
         "Warp",
         "WezTerm",
+        "kero",          // kero 终端（daemon 主进程名）
+        "Kaku",          // Kaku 终端（WezTerm 家族 fork）
         "Tabby",
         "Rio",
         "Contour",
@@ -120,6 +133,12 @@ struct TerminalAppRegistry: Sendable {
         "co.zeit.hyper",
         "dev.warp.Warp-Stable",
         "com.github.wez.wezterm",
+        // ============================================================ //
+        //  kero 双 bundle 变体：isTerminalBundle / 窗口枚举匹配面
+        // ============================================================ //
+        "sh.kero",
+        "sh.kero.dev",
+        "fun.tw93.kaku",
         "com.microsoft.VSCode",
         "com.microsoft.VSCodeInsiders",
         "com.todesktop.230313mzl4w4u92",  // Cursor

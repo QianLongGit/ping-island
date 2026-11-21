@@ -4,7 +4,7 @@
 </h1>
 <p align="center">
   <b>macOS 菜单栏里的灵动岛风格 AI 编码会话监视器</b><br>
-  <a href="https://erha19.github.io/">官网</a> •
+  <a href="https://QianLongGit.github.io/">官网</a> •
   <a href="#lets-try-it">演示</a> •
   <a href="#installation">安装</a> •
   <a href="#features">功能</a> •
@@ -17,11 +17,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/erha19/ping-island/releases">
-    <img src="https://img.shields.io/github/v/release/erha19/ping-island?display_name=tag&style=flat-square" alt="最新版本">
+  <a href="https://github.com/QianLongGit/ping-island/releases">
+    <img src="https://img.shields.io/github/v/release/QianLongGit/ping-island?display_name=tag&style=flat-square" alt="最新版本">
   </a>
-  <a href="https://github.com/erha19/ping-island/releases">
-    <img src="https://img.shields.io/github/downloads/erha19/ping-island/total?style=flat-square" alt="Release 下载次数">
+  <a href="https://github.com/QianLongGit/ping-island/releases">
+    <img src="https://img.shields.io/github/downloads/QianLongGit/ping-island/total?style=flat-square" alt="Release 下载次数">
   </a>
   <img src="https://img.shields.io/badge/macOS-14%2B-0A84FF?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 或更高">
   <img src="https://img.shields.io/badge/Swift-6.1-FA7343?style=flat-square&logo=swift&logoColor=white" alt="Swift 6.1">
@@ -37,7 +37,7 @@
 </p>
 
 <p align="center">
-  <sub>官网：<a href="https://erha19.github.io/ping-island/">erha19.github.io/ping-island</a></sub>
+  <sub>官网：<a href="https://QianLongGit.github.io/ping-island/">QianLongGit.github.io/ping-island</a></sub>
 </p>
 
 <p align="center">
@@ -86,7 +86,7 @@ brew install --cask ping-island
 
 ### 下载发行版
 
-1. 先访问[官网](https://erha19.github.io/ping-island/)查看产品介绍和最新下载入口，或直接打开 [Releases](https://github.com/erha19/ping-island/releases)
+1. 先访问[官网](https://QianLongGit.github.io/ping-island/)查看产品介绍和最新下载入口，或直接打开 [Releases](https://github.com/QianLongGit/ping-island/releases)
 2. 下载最新的 DMG 或 zip 包
 3. 将 `Ping Island.app` 拖到 Applications
 4. 启动应用，并打开你希望 Ping Island 监控的客户端
@@ -99,7 +99,7 @@ brew install --cask ping-island
 需要 macOS 14+，以及能同时构建 Xcode 工程和 Swift 6.1 `Prototype` 测试包的 Xcode 工具链。
 
 ```bash
-git clone https://github.com/erha19/ping-island.git
+git clone https://github.com/QianLongGit/ping-island.git
 cd ping-island
 
 # Debug 构建
@@ -323,11 +323,11 @@ Claude / Codex / Gemini CLI / Hermes Agent / Pi Agent / Oh My Pi (OMP) / Qwen Co
 
 Ping Island 的成长，离不开每一位参与共建的朋友。从客户端接入、交互打磨，到问题修复、文档完善，每一份贡献都让这座小岛变得更好。感谢所有提交代码、参与测试、分享想法的你们。❤️
 
-<a href="https://github.com/erha19/ping-island/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=erha19/ping-island" alt="Ping Island 贡献者" />
+<a href="https://github.com/QianLongGit/ping-island/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=QianLongGit/ping-island" alt="Ping Island 贡献者" />
 </a>
 
-欢迎看看[他们的贡献](https://github.com/erha19/ping-island/graphs/contributors)，也关注一下这些开发者。想一起建设 Ping Island？欢迎在 [Issues](https://github.com/erha19/ping-island/issues) 中分享想法、反馈问题，或提交 [Pull Request](https://github.com/erha19/ping-island/pulls)。
+欢迎看看[他们的贡献](https://github.com/QianLongGit/ping-island/graphs/contributors)，也关注一下这些开发者。想一起建设 Ping Island？欢迎在 [Issues](https://github.com/QianLongGit/ping-island/issues) 中分享想法、反馈问题，或提交 [Pull Request](https://github.com/QianLongGit/ping-island/pulls)。
 
 ## 致谢
 

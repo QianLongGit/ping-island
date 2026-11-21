@@ -4,7 +4,7 @@
 </h1>
 <p align="center">
   <b>AI coding session monitor for the macOS menu bar</b><br>
-  <a href="https://erha19.github.io/">Website</a> •
+  <a href="https://QianLongGit.github.io/">Website</a> •
   <a href="#lets-try-it">Try it</a> •
   <a href="#installation">Install</a> •
   <a href="#features">Features</a> •
@@ -17,11 +17,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/erha19/ping-island/releases">
-    <img src="https://img.shields.io/github/v/release/erha19/ping-island?display_name=tag&style=flat-square" alt="Latest release">
+  <a href="https://github.com/QianLongGit/ping-island/releases">
+    <img src="https://img.shields.io/github/v/release/QianLongGit/ping-island?display_name=tag&style=flat-square" alt="Latest release">
   </a>
-  <a href="https://github.com/erha19/ping-island/releases">
-    <img src="https://img.shields.io/github/downloads/erha19/ping-island/total?style=flat-square" alt="Release downloads">
+  <a href="https://github.com/QianLongGit/ping-island/releases">
+    <img src="https://img.shields.io/github/downloads/QianLongGit/ping-island/total?style=flat-square" alt="Release downloads">
   </a>
   <img src="https://img.shields.io/badge/macOS-14%2B-0A84FF?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 or later">
   <img src="https://img.shields.io/badge/Swift-6.1-FA7343?style=flat-square&logo=swift&logoColor=white" alt="Swift 6.1">
@@ -39,7 +39,7 @@
 </p>
 
 <p align="center">
-  <sub>Official website: <a href="https://erha19.github.io/ping-island/">erha19.github.io/ping-island</a></sub>
+  <sub>Official website: <a href="https://QianLongGit.github.io/ping-island/">QianLongGit.github.io/ping-island</a></sub>
 </p>
 
 <p align="center">
@@ -88,7 +88,7 @@ brew install --cask ping-island
 
 ### Download a Release
 
-1. Visit the [official website](https://erha19.github.io/ping-island/) for the product overview and latest download link, or go straight to [Releases](https://github.com/erha19/ping-island/releases).
+1. Visit the [official website](https://QianLongGit.github.io/ping-island/) for the product overview and latest download link, or go straight to [Releases](https://github.com/QianLongGit/ping-island/releases).
 2. Download the latest DMG.
 3. Move `Ping Island.app` into your Applications folder.
 4. Launch the app and start the clients you want Ping Island to monitor.
@@ -101,7 +101,7 @@ brew install --cask ping-island
 Requires macOS 14+ and an Xcode toolchain that can build the Xcode project and the Swift 6.1 `Prototype` package tests.
 
 ```bash
-git clone https://github.com/erha19/ping-island.git
+git clone https://github.com/QianLongGit/ping-island.git
 cd ping-island
 
 # Debug build
@@ -359,11 +359,11 @@ Implementation details worth knowing:
 
 Ping Island grows with the people who build it. From client integrations and interaction design to bug fixes and documentation, every contribution makes the island a little better. Thank you to everyone who shares code, tests a release, or brings a fresh idea. ❤️
 
-<a href="https://github.com/erha19/ping-island/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=erha19/ping-island" alt="Ping Island contributors" />
+<a href="https://github.com/QianLongGit/ping-island/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=QianLongGit/ping-island" alt="Ping Island contributors" />
 </a>
 
-Explore [their contributions](https://github.com/erha19/ping-island/graphs/contributors) and give them a follow. Want to help shape Ping Island? Share an idea or report a bug in [Issues](https://github.com/erha19/ping-island/issues), or contribute a [Pull Request](https://github.com/erha19/ping-island/pulls).
+Explore [their contributions](https://github.com/QianLongGit/ping-island/graphs/contributors) and give them a follow. Want to help shape Ping Island? Share an idea or report a bug in [Issues](https://github.com/QianLongGit/ping-island/issues), or contribute a [Pull Request](https://github.com/QianLongGit/ping-island/pulls).
 
 ## Acknowledgments
 

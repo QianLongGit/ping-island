@@ -7,11 +7,11 @@ install it directly without adding a custom tap:
 brew install --cask ping-island
 ```
 
-Machines that still have the legacy `erha19/tap` tap may resolve that tap before
+Machines that still have the legacy `QianLongGit/tap` tap may resolve that tap before
 the official cask. Remove the old tap once before checking the official source:
 
 ```bash
-brew untap erha19/tap
+brew untap QianLongGit/tap
 brew install --cask ping-island
 ```
 
@@ -42,8 +42,8 @@ brew update
 brew info --cask ping-island
 ```
 
-If `brew info` reports `From: https://github.com/erha19/homebrew-tap.git`, the
-local machine is still resolving the legacy tap. Run `brew untap erha19/tap` and
+If `brew info` reports `From: https://github.com/QianLongGit/homebrew-tap.git`, the
+local machine is still resolving the legacy tap. Run `brew untap QianLongGit/tap` and
 check again.
 
 For a full install check on a clean macOS machine:

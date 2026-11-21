@@ -362,6 +362,9 @@ struct RemoteHookClientInfoPayload: Codable, Sendable {
     let iTermSessionIdentifier: String?
     let tmuxSessionIdentifier: String?
     let tmuxPaneIdentifier: String?
+    // Warp pane UUID（Task N2a）：远端 bridge 经进程爬链 + SQLite
+    // 解析后随 clientInfo 贯穿；旧远端无此字段解码得 nil
+    let warpPaneUUID: String?
     let processName: String?
 }
 

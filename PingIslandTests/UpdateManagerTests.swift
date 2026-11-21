@@ -32,7 +32,7 @@ final class UpdateManagerTests: XCTestCase {
     func testPublishedGitHubFeedURLIsAccepted() {
         XCTAssertTrue(
             UpdateManager.isValidFeedURL(
-                "https://github.com/erha19/ping-island/releases/latest/download/appcast.xml"
+                "https://github.com/QianLongGit/ping-island/releases/latest/download/appcast.xml"
             )
         )
     }

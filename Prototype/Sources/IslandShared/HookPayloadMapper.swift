@@ -725,7 +725,25 @@ public enum HookPayloadMapper {
     }
 
     private static func makeTerminalContext(environment: [String: String], payload: [String: Any]) -> TerminalContext {
-        let terminalProgram = environment["TERM_PROGRAM"]
+        // ─────────────────────────────────────────────────────────────
+        // kero 判定先于一切 TERM_PROGRAM 逻辑：
+        // kero pane 内嵌 libghostty-vt，TERM_PROGRAM 会被污染为
+        // "ghostty"；KERO_PANE 由 kero daemon 注入，真 Ghostty 环境
+        // 不含该变量，是唯一可靠的判别器。命中后 terminalProgram 固定
+        // 为 "kero"，bundle 推断随之短路到 sh.kero；__CFBundleIdentifier
+        // 已能给出 sh.kero / sh.kero.dev 时沿用下方原有优先级保真。
+        // ─────────────────────────────────────────────────────────────
+        let isKeroPane = nonEmpty(environment["KERO_PANE"]) != nil
+        var terminalProgram = isKeroPane ? "kero" : environment["TERM_PROGRAM"]
+        // ─────────────────────────────────────────────────────────
+        // Warp 兜底（Task N2a）：TERM_PROGRAM 缺失的边缘场景下，
+        // Warp 导出的 WARP_IS_LOCAL_SHELL_SESSION 是唯一识别信号，
+        // 补记 terminalProgram="warp" 使 bundle 推断可用。
+        // 与 kero 的强制覆写语义不同：仅补缺，绝不清写已有值。
+        // ─────────────────────────────────────────────────────────
+        if terminalProgram == nil, nonEmpty(environment["WARP_IS_LOCAL_SHELL_SESSION"]) != nil {
+            terminalProgram = "warp"
+        }
         let ideContext = detectIDEContext(environment: environment)
         let remoteContext = detectRemoteContext(environment: environment)
         let inferredBundleID = inferredTerminalBundleID(
@@ -764,6 +782,14 @@ public enum HookPayloadMapper {
             return "com.googlecode.iterm2"
         case "apple_terminal", "terminal", "terminal.app":
             return "com.apple.Terminal"
+        // kero：内嵌 libghostty-vt 导致 TERM_PROGRAM 报 "ghostty"，
+        // 正常路径由 makeTerminalContext 以 KERO_PANE 覆写为 "kero"
+        // 后进入本 case；此处兜底保证裸 program=="kero" 也能推断。
+        case "kero":
+            return "sh.kero"
+        // Kaku：WezTerm 家族终端（tw93 fork），TERM_PROGRAM 报 "kaku"
+        case "kaku":
+            return "fun.tw93.kaku"
         case "ghostty":
             return "com.mitchellh.ghostty"
         case "cmux":

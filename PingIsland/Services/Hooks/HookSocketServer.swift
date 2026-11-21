@@ -415,6 +415,9 @@ private struct BridgeTerminalContext: Codable, Sendable {
     let remoteHost: String?
     let tmuxSession: String?
     let tmuxPane: String?
+    // Warp pane UUID（Task N2a）：bridge hook 进程内解析后随
+    // terminalContext 编码贯穿；无 Warp 环境为 nil
+    let warpPaneUUID: String?
 }
 
 private struct BridgeEnvelope: Decodable, Sendable {
@@ -474,7 +477,8 @@ private struct BridgeEnvelope: Decodable, Sendable {
                 transport: nil,
                 remoteHost: nil,
                 tmuxSession: nil,
-                tmuxPane: nil
+                tmuxPane: nil,
+                warpPaneUUID: nil
             )
         intervention = try container.decodeIfPresent(BridgeEnvelopeIntervention.self, forKey: .intervention)
 
@@ -1076,6 +1080,7 @@ private extension BridgeEnvelope {
             iTermSessionIdentifier: terminalContext.iTermSessionID,
             tmuxSessionIdentifier: terminalContext.tmuxSession,
             tmuxPaneIdentifier: terminalContext.tmuxPane,
+            warpPaneIdentifier: terminalContext.warpPaneUUID,
             processName: processName
         )
         switch provider {
@@ -1549,6 +1554,13 @@ class HookSocketServer {
         let normalizedTerminalProgram = terminalProgram?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+        // ============================================================ //
+        //  镜像点：terminalProgram -> bundle 推断（与 hook 侧 mapper 同一约定）
+        //  kero 约定：program=="kero" -> "sh.kero"（dev 变体经 isTerminalBundle 覆盖）。
+        //  推断表唯一真源在 TerminalAppRegistry，此处仅作传导调用——
+        //  kero pane 因内嵌 libghostty-vt 报 TERM_PROGRAM=ghostty，hook 侧已按
+        //  KERO_PANE 短路改写为 "kero"，故此处不会将 kero 误推断为 ghostty。
+        // ============================================================ //
         let inferredTerminalProgramBundleID = TerminalAppRegistry
             .inferredBundleIdentifier(forTerminalProgram: terminalProgram)?
             .trimmingCharacters(in: .whitespacesAndNewlines)

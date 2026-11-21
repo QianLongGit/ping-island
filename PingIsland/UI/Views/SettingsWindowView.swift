@@ -3658,6 +3658,14 @@ private struct SettingsPanelContentView: View {
                 }
             }
 
+            SettingsSectionCard(title: "终端文本发送") {
+                SettingsToggleLine(
+                    title: "在悬停卡片中发送文本到终端",
+                    subtitle: "开启后会话空闲（等待输入）时，悬停卡片底部显示单行输入框，回车或点击发送将文本送进宿主终端（tmux / Ghostty / cmux）；远程会话与 kero 终端不支持。默认关闭。",
+                    isOn: $settings.terminalTextSendingEnabled
+                )
+            }
+
             SettingsSectionCard(title: "Hook 调试日志") {
                 SettingsToggleLine(
                     title: "记录 Hook 调试日志",
@@ -3981,7 +3989,7 @@ private struct SettingsPanelContentView: View {
 
             SettingsSectionCard(title: "链接") {
                 SettingsActionLine(title: "GitHub", subtitle: "打开 Issues 页面反馈问题") {
-                    if let url = URL(string: "https://github.com/erha19/ping-island/issues") {
+                    if let url = URL(string: "https://github.com/QianLongGit/ping-island/issues") {
                         NSWorkspace.shared.open(url)
                     }
                 } accessory: {

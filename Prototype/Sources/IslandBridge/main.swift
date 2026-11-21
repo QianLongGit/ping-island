@@ -38,12 +38,19 @@ struct IslandBridgeMain {
                     environment["TTY"] = tty
                 }
                 let runtimeConfig = BridgeRuntimeConfig.load(environment: environment)
-                let envelope = HookPayloadMapper.makeEnvelope(
+                var envelope = HookPayloadMapper.makeEnvelope(
                     source: source,
                     arguments: CommandLine.arguments,
                     environment: environment,
                     stdinData: stdinData,
                     runtimeConfig: runtimeConfig
+                )
+                // Warp pane 解析（Task N2a）：bridge 以 hook 模式运行于
+                // agent 子进程内，此刻沿祖先链爬到 Warp shell 即可锁定
+                // pane；非 Warp 环境零开销静默跳过
+                WarpPaneResolution.apply(
+                    to: &envelope,
+                    environment: environment
                 )
                 try? BridgeDebugLogger.logIfNeeded(
                     envelope: envelope,
@@ -1963,7 +1970,9 @@ private struct CodexStateDatabase {
     }
 }
 
-private struct RemoteHookClientInfoPayload: Codable {
+// internal：供 IslandTests 做远程 payload 组装/roundtrip 单测（与 App 侧
+// RemoteModels.swift 的 RemoteHookClientInfoPayload 为手工镜像，wire key 一致）
+struct RemoteHookClientInfoPayload: Codable {
     let kind: String
     let profileID: String?
     let name: String?
@@ -1982,9 +1991,12 @@ private struct RemoteHookClientInfoPayload: Codable {
     let tmuxSessionIdentifier: String?
     let tmuxPaneIdentifier: String?
     let processName: String?
+    // Warp pane UUID（Task N2a）：非 Warp 环境缺席/为 null，
+    // App 侧可选解码
+    let warpPaneUUID: String?
 }
 
-private struct RemoteHookEventPayload: Codable {
+struct RemoteHookEventPayload: Codable {
     let requestID: UUID
     let sessionID: String
     let cwd: String
@@ -2004,7 +2016,7 @@ private struct RemoteHookEventPayload: Codable {
     let clientInfo: RemoteHookClientInfoPayload
 }
 
-private struct RemoteHookEventMessage: Codable {
+struct RemoteHookEventMessage: Codable {
     let type: String
     let payload: RemoteHookEventPayload
 }
@@ -2049,8 +2061,96 @@ private enum RemoteControlEnvelope: Decodable {
     }
 }
 
-private enum RemoteBridgeMessageBuilder {
-    static func message(from thread: RemoteCodexThread) -> RemoteHookEventMessage {
+// ═══════════════════════════════════════════════════════════════
+// WarpPaneResolution —— Warp pane UUID 的判定与填充
+// （终端扩充 Task N2a，数据层；供 IslandTests @testable 单测）
+//
+// ▸ isWarpPaneContext：三路识别信号（TERM_PROGRAM 含 warp /
+//   bundle 标识匹配 / WARP_IS_LOCAL_SHELL_SESSION 兜底），
+//   kero/ghostty 等既有终端一律不命中
+// ▸ resolvePaneUUID：主路径=进程爬链 + sibling 索引关联，
+//   兜底=cwd 关联查询；任何一环失败静默 nil（无 Warp 安装
+//   环境零崩溃零副作用）
+// ▸ apply：唯一生产入口，Warp 环境才调解析器，结果写入
+//   envelope.terminalContext.warpPaneUUID
+// ═══════════════════════════════════════════════════════════════
+
+enum WarpPaneResolution {
+    /// 判定当前 envelope 的终端上下文是否运行在 Warp 内。
+    /// 纯函数，无副作用，可独立测试。
+    static func isWarpPaneContext(
+        _ terminalContext: TerminalContext,
+        environment: [String: String]
+    ) -> Bool {
+        // 路径一：TERM_PROGRAM 含 "warp"（覆盖真实形态
+        // WarpTerminal 与小写防御形态，大小写不敏感）
+        if let program = terminalContext.terminalProgram?
+            .lowercased(), program.contains("warp") {
+            return true
+        }
+        // 路径二：bundle 标识匹配（registry/mapper 输出混合大小写，
+        // NSRunningApplication 可能报小写形态，统一小写比较）
+        if let bundleID = terminalContext.terminalBundleID?
+            .lowercased(), bundleID == "dev.warp.warp-stable" {
+            return true
+        }
+        // 路径三：Warp 导出的会话标记兜底（TERM_PROGRAM 缺失的
+        // 边缘场景，mapper 已补记 terminalProgram="warp"，此处
+        // 直接看 env 双保险）
+        if environment["WARP_IS_LOCAL_SHELL_SESSION"]?.isEmpty == false {
+            return true
+        }
+        return false
+    }
+
+    /// 两级解析：主路径为进程爬链 + sibling 索引关联（可区分共享
+    /// 同一 cwd 的兄弟 tab），落空时回退 cwd 关联查询。全失败 nil。
+    static func resolvePaneUUID(
+        shellContext: WarpProcessResolver.PaneContext?,
+        cwd: String?
+    ) -> String? {
+        let reader = WarpSQLiteReader()
+        if let shellContext,
+           let uuid = reader.lookupPaneUUIDByShellPID(
+               shellContext.shellPID,
+               terminalServerPID: shellContext.terminalServerPID
+           ) {
+            return uuid
+        }
+        if let cwd, !cwd.isEmpty {
+            return reader.lookupPaneUUID(forCwd: cwd)
+        }
+        return nil
+    }
+
+    /// 生产解析器：在 bridge hook 进程内沿祖先链定位 Warp shell。
+    static let defaultResolve: @Sendable (TerminalContext) -> String? = { context in
+        resolvePaneUUID(
+            shellContext: WarpProcessResolver.resolveCurrentPaneContext(),
+            cwd: context.currentDirectory
+        )
+    }
+
+    /// 唯一生产入口：Warp 环境才调用解析器，结果写入
+    /// envelope.terminalContext.warpPaneUUID。resolve 参数供测试注入。
+    static func apply(
+        to envelope: inout BridgeEnvelope,
+        environment: [String: String],
+        resolve: @Sendable (TerminalContext) -> String? = defaultResolve
+    ) {
+        guard isWarpPaneContext(envelope.terminalContext, environment: environment) else {
+            return
+        }
+        guard let uuid = resolve(envelope.terminalContext), !uuid.isEmpty else {
+            return
+        }
+        envelope.terminalContext.warpPaneUUID = uuid
+    }
+}
+
+enum RemoteBridgeMessageBuilder {
+    // fileprivate：签名携带文件内私有类型 RemoteCodexThread，限本文件调用点
+    fileprivate static func message(from thread: RemoteCodexThread) -> RemoteHookEventMessage {
         RemoteHookEventMessage(type: "hook_event", payload: payload(from: thread))
     }
 
@@ -2101,7 +2201,8 @@ private enum RemoteBridgeMessageBuilder {
                 iTermSessionIdentifier: terminalContext.iTermSessionID,
                 tmuxSessionIdentifier: terminalContext.tmuxSession,
                 tmuxPaneIdentifier: terminalContext.tmuxPane,
-                processName: firstNonEmpty(metadata["source_process_name"], metadata["process_name"])
+                processName: firstNonEmpty(metadata["source_process_name"], metadata["process_name"]),
+                warpPaneUUID: terminalContext.warpPaneUUID
             )
         )
     }
@@ -2145,7 +2246,8 @@ private enum RemoteBridgeMessageBuilder {
                 iTermSessionIdentifier: nil,
                 tmuxSessionIdentifier: nil,
                 tmuxPaneIdentifier: nil,
-                processName: "codex app-server"
+                processName: "codex app-server",
+                warpPaneUUID: nil
             )
         )
     }
@@ -2308,7 +2410,11 @@ private enum RemoteBridgeMessageBuilder {
              "net.kovidgoyal.kitty",
              "co.zeit.hyper",
              "dev.warp.warp-stable",
-             "com.github.wez.wezterm":
+             "com.github.wez.wezterm",
+             // kero 正式版与 dev 构建（内嵌 libghostty-vt，TERM_PROGRAM=ghostty，
+             // 需以独立终端身份参与远程链路的 bundle 标识仲裁，不被 IDE 值覆盖）
+             "sh.kero",
+             "sh.kero.dev":
             return true
         default:
             return false

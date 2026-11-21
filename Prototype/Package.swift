@@ -28,7 +28,7 @@ let package = Package(
         ),
         .testTarget(
             name: "IslandTests",
-            dependencies: ["IslandShared", "IslandApp"],
+            dependencies: ["IslandShared", "IslandApp", "PingIslandBridge"],
             path: "Tests/IslandTests"
         )
     ],

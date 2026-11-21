@@ -354,6 +354,9 @@ struct HoverSessionCard: View {
                 HoverSessionHeader(session: session)
 
                 HoverConversationCard(session: session, snapshot: snapshot)
+
+                // 终端发送输入行：开关 off / 会话运行中在内部自判不渲染
+                HoverTerminalTextComposer(session: session)
             }
         }
         .padding(.horizontal, density.itemHorizontalPadding)
