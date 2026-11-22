@@ -16,7 +16,7 @@ final class IslandPresentationCoordinator {
 
     init(screen: NSScreen) {
         self.screen = screen
-        self.viewModel = Self.makeViewModel(for: screen)
+        self.viewModel = Self.makeViewModel(for: screen, sessionMonitor: sessionMonitor)
         bindViewModel()
         bindSettings()
         applySurfaceMode(AppSettings.surfaceMode, activationPolicy: .silent)
@@ -256,7 +256,10 @@ final class IslandPresentationCoordinator {
         controller.showWindow(nil)
     }
 
-    private static func makeViewModel(for screen: NSScreen) -> NotchViewModel {
+    private static func makeViewModel(
+        for screen: NSScreen,
+        sessionMonitor: SessionMonitor
+    ) -> NotchViewModel {
         let geometry = makeDockedScreenGeometry(for: screen)
 
         return NotchViewModel(
@@ -264,7 +267,12 @@ final class IslandPresentationCoordinator {
             screenRect: geometry.screenRect,
             windowHeight: geometry.windowHeight,
             hasPhysicalNotch: geometry.hasPhysicalNotch,
-            notchModuleWidthProvider: { AppSettings.notchModuleWidth }
+            notchModuleWidthProvider: { AppSettings.notchModuleWidth },
+            // ── 智能预览内容源（T13）：与主列表同源的活动会话集 ──────────
+            // hover 打开前查询：非空→轻量预览面板；空→直接完整面板。
+            hoverPreviewSessionsProvider: {
+                IslandExpandedRouteResolver.activePreviewSessions(from: sessionMonitor.instances)
+            }
         )
     }
 

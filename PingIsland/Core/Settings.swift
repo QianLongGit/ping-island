@@ -194,28 +194,6 @@ enum NotchDisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
-// ═════════════════════════════════════════════════════════════════
-// MARK: - 面板打开方式（hover / 点击）
-//
-// hover = 鼠标移入刘海即弹（默认，延续既有体感）；click = 仅点击
-// 打开，移入不触发——供偏好稳定悬浮的用户关闭"扫过即弹"干扰。
-// ═════════════════════════════════════════════════════════════════
-enum NotchOpenTrigger: String, CaseIterable, Identifiable {
-    case hover
-    case click
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .hover:
-            return "鼠标移入"
-        case .click:
-            return "点击"
-        }
-    }
-}
-
 enum ClosedNotchTrailingContentMode: String, CaseIterable, Identifiable {
     case sessionCount
     case claudeSevenDayRemaining
@@ -476,7 +454,6 @@ final class AppSettingsStore: ObservableObject {
         static let routePromptsToTerminal = "routePromptsToTerminal"
         static let terminalTextSendingEnabled = "terminalTextSendingEnabled"
         static let compactSessionList = "compactSessionList"
-        static let notchOpenTrigger = "notchOpenTrigger"
         static let autoRoutePromptsToTerminalWhenIdleEnabled = "autoRoutePromptsToTerminalWhenIdleEnabled"
         static let autoRoutePromptsIdleDelay = "autoRoutePromptsIdleDelay"
         static let hookDebugLoggingEnabled = "hookDebugLoggingEnabled"
@@ -1074,20 +1051,6 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
-    /// 面板打开方式——默认 .hover（鼠标移入即弹）。设为 .click 后
-    /// 移入刘海不再自动弹出，仅点击触发；dwell 检测照常运行但
-    /// 打开动作被门控，保证点击模式下的显式意图不被劫持。
-    @Published var notchOpenTrigger: NotchOpenTrigger {
-        didSet {
-            guard !isBootstrapping else { return }
-            defaults.set(notchOpenTrigger.rawValue, forKey: Keys.notchOpenTrigger)
-            recordTelemetrySettingChange(
-                key: Keys.notchOpenTrigger,
-                value: notchOpenTrigger.rawValue
-            )
-        }
-    }
-
     @Published var autoRoutePromptsToTerminalWhenIdleEnabled: Bool {
         didSet {
             guard !isBootstrapping else { return }
@@ -1640,10 +1603,6 @@ final class AppSettingsStore: ObservableObject {
             exists: persistedKeys.contains(Keys.compactSessionList),
             default: true
         ))
-        let notchOpenTriggerRaw = defaults.string(forKey: Keys.notchOpenTrigger)
-        _notchOpenTrigger = Published(initialValue: NotchOpenTrigger(
-            rawValue: notchOpenTriggerRaw ?? ""
-        ) ?? .hover)
         subagentVisibilityModeStorage = SubagentVisibilityMode(
             persistedValue: subagentVisibilityModeRaw ?? ""
         ) ?? .visible
@@ -1975,11 +1934,6 @@ enum AppSettings {
     static var compactSessionList: Bool {
         get { shared.compactSessionList }
         set { shared.compactSessionList = newValue }
-    }
-
-    static var notchOpenTrigger: NotchOpenTrigger {
-        get { shared.notchOpenTrigger }
-        set { shared.notchOpenTrigger = newValue }
     }
 
     static var notchModuleWidth: Double {

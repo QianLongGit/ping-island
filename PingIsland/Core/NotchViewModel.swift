@@ -49,8 +49,12 @@ class NotchViewModel: ObservableObject {
     // ── 实例面板内容需求输入（驱动解析式高度公式） ──────────────
     // instanceRowCount：列表行数（主行+子代理行），由 SessionListView
     //   上报；isNotificationPresentationActive：完成通知卡是否正
-    //   在面板内呈示，呈示时以通知卡最低高度兜底内容需求。
+    //   在面板内呈示，呈示时以通知卡最低高度兜底内容需求；
+    //   hoverPreviewSessionCount：hover 预览 dashboard 的会话卡数
+    //   （≤3），由 hoverPreviewSessionsProvider 派生更新
+    //   （唯一更新点 updateHoverPreviewSessionCount），驱动预览估算高。
     @Published private(set) var instanceRowCount: Int = 0
+    @Published private(set) var hoverPreviewSessionCount: Int = 0
     @Published private(set) var isNotificationPresentationActive: Bool = false
     @Published private(set) var isFullscreenEdgeRevealActive = false
     @Published private(set) var isFullscreenPhysicalNotchCompactActive = false
@@ -177,11 +181,38 @@ class NotchViewModel: ObservableObject {
                 )
             }
         case .instances:
-            let fallbackHeight: CGFloat = openReason == .hover ? 150 : 170
-            let measuredHeight = openedMeasuredHeight ?? fallbackHeight
-
             switch style {
             case .docked:
+                // ── 面板高度 = 内容自适应，上限封顶 ───────────────────
+                // 解析式按行数×行高估算内容需求（LazyVStack 的实测
+                // 值会被视口钳制成"自我实现的矮面板"，不可依赖），
+                // 再以 min(需求, 上限) 收口：少量会话时面板贴合
+                // 内容，大量会话时封顶并由列表内部滚动。
+                let listHeight = Self.estimatedInstancesPanelHeight(
+                    instanceRowCount: instanceRowCount,
+                    isNotificationPresentationActive: isNotificationPresentationActive,
+                    compactList: AppSettings.compactSessionList,
+                    contentFontSize: CGFloat(AppSettings.contentFontSize),
+                    closedHeight: closedHeight,
+                    maxAllowedHeight: maxAllowedHeight
+                )
+                // ── 预览面板（dashboard）：实测优先，卡数估算兜底 ────
+                // dashboard 为普通 VStack（非惰性）preference 实测可
+                // 信；实测未回报的首帧按卡数估算（空态卡 160）。
+                let panelHeight: CGFloat
+                if openReason == .hover {
+                    let previewEstimate = Self.estimatedHoverPreviewPanelHeight(
+                        sessionCount: hoverPreviewSessionCount,
+                        closedHeight: closedHeight,
+                        maxAllowedHeight: maxAllowedHeight
+                    )
+                    panelHeight = min(
+                        maxAllowedHeight,
+                        max(closedHeight + 24, openedMeasuredHeight ?? previewEstimate)
+                    )
+                } else {
+                    panelHeight = listHeight
+                }
                 return CGSize(
                     width: openReason == .hover
                         ? min(screenRect.width - 64, 600)
@@ -189,26 +220,30 @@ class NotchViewModel: ObservableObject {
                             screenRect.width * Self.clickedInstancesPanelWidthRatio,
                             Self.clickedInstancesPanelMaximumWidth
                         ),
-                    // ── 面板高度 = 内容自适应，上限封顶 ───────────────
-                    // 解析式按行数×行高估算内容需求（LazyVStack 的实测
-                    // 值会被视口钳制成"自我实现的矮面板"，不可依赖），
-                    // 再以 min(需求, 上限) 收口：少量会话时面板贴合
-                    // 内容，大量会话时封顶并由列表内部滚动。
-                    height: Self.estimatedInstancesPanelHeight(
-                        instanceRowCount: instanceRowCount,
-                        isNotificationPresentationActive: isNotificationPresentationActive,
-                        compactList: AppSettings.compactSessionList,
-                        contentFontSize: CGFloat(AppSettings.contentFontSize),
-                        closedHeight: closedHeight,
-                        maxAllowedHeight: maxAllowedHeight
-                    )
+                    height: panelHeight
                 )
             case .detached:
                 return CGSize(
                     width: min(screenRect.width - 112, 400),
+                    // ── T13：detached 接入同一解析式（去固定 170 与
+                    // 300 封顶）：实测通知高（面板全高量纲）与解析式
+                    // 取 max 融合，再走 cap 收口。
                     height: min(
                         maxAllowedHeight,
-                        max(closedHeight + 24, min(measuredHeight, 300))
+                        max(
+                            closedHeight + 24,
+                            max(
+                                Self.estimatedInstancesPanelHeight(
+                                    instanceRowCount: instanceRowCount,
+                                    isNotificationPresentationActive: isNotificationPresentationActive,
+                                    compactList: AppSettings.compactSessionList,
+                                    contentFontSize: CGFloat(AppSettings.contentFontSize),
+                                    closedHeight: closedHeight,
+                                    maxAllowedHeight: maxAllowedHeight
+                                ),
+                                openedMeasuredHeight ?? 0
+                            )
+                        )
                     )
                 )
             }
@@ -280,6 +315,11 @@ class NotchViewModel: ObservableObject {
     private let hideInFullscreenProvider: @MainActor () -> Bool
     private let autoHideWhenIdleProvider: @MainActor () -> Bool
     private let notchModuleWidthProvider: @MainActor () -> Double
+    // ── hover 预览内容源（T13 智能层） ────────────────────────────
+    // 由组装层注入（IslandPresentationCoordinator）：返回当前可进入
+    // 预览的活动会话集合；为空时 hover 驻留直接展开完整面板，跳过
+    // 「无活动会话」空态卡中转。测试注入可控数组。
+    private let hoverPreviewSessionsProvider: @MainActor () -> [SessionState]
     private var hoverTimer: DispatchWorkItem?
     // Keep hover previews feeling responsive without making incidental cursor
     // passes over the notch expand it too aggressively.
@@ -325,6 +365,9 @@ class NotchViewModel: ObservableObject {
         fullscreenBrowserHiddenProvider: @escaping @MainActor (CGRect) -> Bool = FullscreenAppDetector.isFullscreenBrowserActive,
         autoHideWhenIdleProvider: @escaping @MainActor () -> Bool = { AppSettings.autoHideWhenIdle },
         notchModuleWidthProvider: @escaping @MainActor () -> Double = { AppSettingsStore.defaultNotchModuleWidth },
+        // ── T13 智能层：hover 预览内容源（可预览会话集合） ──────────
+        // 空集合时 dwell 直接展开完整面板（跳过空态预览卡中转）。
+        hoverPreviewSessionsProvider: @escaping @MainActor () -> [SessionState] = { [] },
         fullscreenStateSettleDelay: TimeInterval = 0.18
     ) {
         self.geometry = NotchGeometry(
@@ -340,6 +383,7 @@ class NotchViewModel: ObservableObject {
         self.hideInFullscreenProvider = hideInFullscreenProvider
         self.autoHideWhenIdleProvider = autoHideWhenIdleProvider
         self.notchModuleWidthProvider = notchModuleWidthProvider
+        self.hoverPreviewSessionsProvider = hoverPreviewSessionsProvider
         self.fullscreenStateSettleDelay = fullscreenStateSettleDelay
         if enableEventMonitoring {
             setupEventHandlers()
@@ -602,6 +646,9 @@ class NotchViewModel: ObservableObject {
             } else if geometry.isPointOutsidePanel(location, size: openedSize) {
                 // The panel window already handles click-through replay for intercepted clicks.
                 notchClose()
+            } else if openReason == .hover {
+                // ── 智能升级（T13）：预览态单击面板内部 → 完整面板 ──
+                handleOpenedPanelInteriorClick()
             }
         case .closed, .popping:
             if detachmentTriggerScreenRect.contains(location) {
@@ -832,9 +879,21 @@ class NotchViewModel: ObservableObject {
     func performDeferredHoverOpenIfNeeded() {
         guard isHovering else { return }
         guard status == .closed || status == .popping else { return }
-        // ── 打开方式门控：click 模式下移入不自动弹出 ──────────────
-        guard AppSettings.notchOpenTrigger == .hover else { return }
-        notchOpen(reason: .hover)
+        // ── 智能打开层（T13）────────────────────────────────────
+        // 预览有内容（activePreviewSessions 非空）→ hover 轻量预览；
+        // 无内容 → 跳过「无活动会话」空态中转，直接完整面板。
+        // 打开瞬间同步卡数，让首帧高度估算即用准实时值（随后由
+        // preference 实测接管，见 panelSize hover 分流）。
+        let previewSessions = hoverPreviewSessionsProvider()
+        updateHoverPreviewSessionCount(previewSessions.count)
+        notchOpen(reason: previewSessions.isEmpty ? .click : .hover)
+    }
+
+    /// opened 面板内部单击：预览态升级为完整面板（任意状态单击即完整面板）。
+    /// 完整面板/聊天视图下幂等（不打断聊天输入等既有交互）。
+    func handleOpenedPanelInteriorClick() {
+        guard openReason == .hover else { return }
+        notchOpen(reason: .click)
     }
 
     func notchClose() {
@@ -992,6 +1051,13 @@ class NotchViewModel: ObservableObject {
         instanceRowCount = sanitized
     }
 
+    func updateHoverPreviewSessionCount(_ count: Int) {
+        let sanitized = max(0, count)
+
+        guard sanitized != hoverPreviewSessionCount else { return }
+        hoverPreviewSessionCount = sanitized
+    }
+
     func updateNotificationPresentationActive(_ isActive: Bool) {
         guard isActive != isNotificationPresentationActive else { return }
         isNotificationPresentationActive = isActive
@@ -1031,6 +1097,45 @@ class NotchViewModel: ObservableObject {
             ? SessionCompletionNotificationView.minimumContentHeight
             : 0
         let contentHeight = max(listHeight, notificationFloor)
+        let chromeOverhead = closedHeight + 12
+
+        return min(
+            maxAllowedHeight,
+            max(closedHeight + 24, chromeOverhead + contentHeight)
+        )
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // hover 预览面板高度解析式（T13）：
+    //   高度 = min(上限, max(closedHeight + 24, closedHeight + 12 + 预览内容高))
+    // 预览内容高（regular 密度）= topPadding 12 + 卡数 × 62 +
+    //   (卡数 - 1) × containerSpacing 18 + bottomPadding 18；
+    // 62 ≈ SessionHoverCompactRow 实际渲染高（itemV 12×2 + 标题
+    // 13×1.3 + 行内间距 6 + 详情 10.5×1.3），highlighted 卡更高——
+    // 首帧估算后由 preference 实测接管修正；0 卡时空态卡按 160 估。
+    // 与 estimatedInstancesPanelHeight 同源换算（chrome+12），纯函数。
+    // ═══════════════════════════════════════════════════════════════
+    static func estimatedHoverPreviewPanelHeight(
+        sessionCount: Int,
+        closedHeight: CGFloat,
+        maxAllowedHeight: CGFloat
+    ) -> CGFloat {
+        let count = max(0, sessionCount)
+        let rowHeight: CGFloat = 62
+        let cardSpacing: CGFloat = 18
+        let topPadding: CGFloat = 12
+        let bottomPadding: CGFloat = 18
+        let emptyCardHeight: CGFloat = 160
+
+        let contentHeight: CGFloat
+        if count == 0 {
+            contentHeight = emptyCardHeight
+        } else {
+            contentHeight = topPadding
+                + CGFloat(count) * rowHeight
+                + CGFloat(count - 1) * cardSpacing
+                + bottomPadding
+        }
         let chromeOverhead = closedHeight + 12
 
         return min(

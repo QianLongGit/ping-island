@@ -12,6 +12,13 @@ import XCTest
 // （自我实现的矮面板）与「恒最大高度」两种极端（cap 不是 floor）。
 // 紧凑行高（base 13）= 8 + 15 + 2 + 13.125 = 38.125；
 // 宽松行高 = 16 + 17.5 + 5 + 27.5 + 3 = 69。
+//
+// T13 增补：hover 预览（dashboard）高度 = 同式 cap 语义，但内容
+// 需求高取「preference 实测优先、卡数估算兜底」——dashboard 为
+// 普通 VStack（非 Lazy）实测可信；估算 = 12 + 卡数×62 +
+// (卡数-1)×18 + 18（regular 密度 padding/间距 + 紧凑行高 62 近似），
+// 0 卡时空态卡按 160 估。detached .instances 接入 docked 同一解
+// 析式（去固定 170 fallback 与 300 封顶），实测通知高取 max 融合。
 // ═════════════════════════════════════════════════════════════════
 final class NotchViewModelPanelSizeTests: XCTestCase {
 
@@ -103,7 +110,7 @@ final class NotchViewModelPanelSizeTests: XCTestCase {
 
     // ── VM 集成：openedSize 走公式（cap 语义） ────────────────────
 
-    func testDockedInstancesHoverZeroRowsStaysAtMinimumUsableHeight() async {
+    func testDockedInstancesHoverZeroPreviewCardsShowsEmptyEstimate() async {
         await MainActor.run {
             let originalMaxPanelHeight = AppSettings.maxPanelHeight
             defer { AppSettings.maxPanelHeight = originalMaxPanelHeight }
@@ -112,7 +119,52 @@ final class NotchViewModelPanelSizeTests: XCTestCase {
             let viewModel = makeViewModel()
             viewModel.notchOpen(reason: .hover)
 
-            // 0 行（未上报行数）→ closedHeight + 24 = 56，而非上限 700
+            // 0 卡（未上报）→ 空态卡估算 32 + 12 + 160 = 204，而非 56 或上限
+            XCTAssertEqual(viewModel.openedSize.height, 204, accuracy: 0.01)
+        }
+    }
+
+    func testHoverPreviewEstimateScalesWithSessionCount() async {
+        await MainActor.run {
+            let originalMaxPanelHeight = AppSettings.maxPanelHeight
+            defer { AppSettings.maxPanelHeight = originalMaxPanelHeight }
+            AppSettings.maxPanelHeight = 700
+
+            let viewModel = makeViewModel()
+            viewModel.notchOpen(reason: .hover)
+
+            // 1 卡：32 + 12 + (12 + 62 + 18) = 136
+            viewModel.updateHoverPreviewSessionCount(1)
+            XCTAssertEqual(viewModel.openedSize.height, 136, accuracy: 0.01)
+
+            // 2 卡：32 + 12 + (12 + 62×2 + 18 + 18) = 216
+            viewModel.updateHoverPreviewSessionCount(2)
+            XCTAssertEqual(viewModel.openedSize.height, 216, accuracy: 0.01)
+
+            // 3 卡：32 + 12 + (12 + 62×3 + 18×2 + 18) = 296
+            viewModel.updateHoverPreviewSessionCount(3)
+            XCTAssertEqual(viewModel.openedSize.height, 296, accuracy: 0.01)
+        }
+    }
+
+    func testDockedInstancesHoverPreviewMeasuredHeightTakesOverEstimate() async {
+        await MainActor.run {
+            let originalMaxPanelHeight = AppSettings.maxPanelHeight
+            defer { AppSettings.maxPanelHeight = originalMaxPanelHeight }
+            AppSettings.maxPanelHeight = 700
+
+            let viewModel = makeViewModel()
+            viewModel.notchOpen(reason: .hover)
+            viewModel.updateHoverPreviewSessionCount(3)
+            // 首帧估算 296（dashboard 为普通 VStack，非 LazyVStack，实测可信）
+            XCTAssertEqual(viewModel.openedSize.height, 296, accuracy: 0.01)
+
+            // preference 实测接管：highlighted 卡更高时按实测撑开
+            viewModel.updateOpenedMeasuredHeight(360)
+            XCTAssertEqual(viewModel.openedSize.height, 360, accuracy: 0.01)
+
+            // 实测小于最小可用高时以 closedHeight + 24 抬底
+            viewModel.updateOpenedMeasuredHeight(40)
             XCTAssertEqual(viewModel.openedSize.height, 56, accuracy: 0.01)
         }
     }
@@ -131,19 +183,43 @@ final class NotchViewModelPanelSizeTests: XCTestCase {
         }
     }
 
-    func testDockedInstancesHeightIgnoresSmallMeasuredHeight() async {
+    // ── T13：detached 实例面板接入同一解析式（去固定 170/300 封顶） ─
+
+    func testDetachedInstancesHeightFollowsRowCount() async {
         await MainActor.run {
             let originalMaxPanelHeight = AppSettings.maxPanelHeight
             defer { AppSettings.maxPanelHeight = originalMaxPanelHeight }
             AppSettings.maxPanelHeight = 700
 
             let viewModel = makeViewModel()
-            viewModel.updateInstanceRowCount(30)
-            viewModel.notchOpen(reason: .hover)
-            // 模拟 LazyVStack 被视口钳制后上报的小测量值
-            viewModel.updateOpenedMeasuredHeight(150)
+            viewModel.beginDetachedPresentation(contentType: .instances)
 
-            XCTAssertEqual(viewModel.openedSize.height, 700, accuracy: 0.01)
+            // 1 行紧凑：与 docked 同式 32 + 12 + 8 + 38.125 = 90.125
+            // （detached 面板高度链 = panelSize(for: .detached)，
+            //   DetachedIslandPanelView:284 消费；detachedSize 是
+            //   orb 球尺寸，与此无关。）
+            viewModel.updateInstanceRowCount(1)
+            XCTAssertEqual(viewModel.panelSize(for: .detached).height, 90.125, accuracy: 0.01)
+
+            // 30 行：解析式 1253.75 → cap 700（不再固定 170 或封顶 300）
+            viewModel.updateInstanceRowCount(30)
+            XCTAssertEqual(viewModel.panelSize(for: .detached).height, 700, accuracy: 0.01)
+        }
+    }
+
+    func testDetachedInstancesHeightMergesMeasuredNotificationHeight() async {
+        await MainActor.run {
+            let originalMaxPanelHeight = AppSettings.maxPanelHeight
+            defer { AppSettings.maxPanelHeight = originalMaxPanelHeight }
+            AppSettings.maxPanelHeight = 700
+
+            let viewModel = makeViewModel()
+            viewModel.beginDetachedPresentation(contentType: .instances)
+            viewModel.updateInstanceRowCount(1)
+
+            // 实测通知卡高（面板全高量纲）高于解析式时取实测
+            viewModel.updateOpenedMeasuredHeight(300)
+            XCTAssertEqual(viewModel.panelSize(for: .detached).height, 300, accuracy: 0.01)
         }
     }
 

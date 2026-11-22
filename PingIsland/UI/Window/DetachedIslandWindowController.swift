@@ -1537,12 +1537,11 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     }
 
     // ══════════════════════════════════════════════════════════════
-    // MARK: 宠物悬停弹出（T12-B · notchOpenTrigger 统一门控）
+    // MARK: 宠物悬停弹出（T13 · 移除 notchOpenTrigger 门控）
     //
-    // 「鼠标移入」档：悬停驻留后弹出活动会话预览（与 docked hover
-    // 手感一致）；「点击」档不弹出，点击/通知弹出保持原语义。
-    // 悬停离开即取消未触发的驻留计时；弹出前复查气泡仍隐藏且
-    // 存在可展示内容（活动会话/待处理通知）。
+    // 悬停驻留后弹出活动会话预览（与 docked hover 手感一致）；
+    // 点击/通知弹出保持原语义。悬停离开即取消未触发的驻留计时；
+    // 弹出前复查气泡仍隐藏且存在可展示内容（活动会话/待处理通知）。
     // ══════════════════════════════════════════════════════════════
     private func handlePetHoverChanged(_ isHovering: Bool) {
         isPetHovered = isHovering
@@ -1552,7 +1551,6 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         }
 
         guard DetachedIslandContentModel.shouldPresentPetHoverPreview(
-            notchOpenTrigger: AppSettings.notchOpenTrigger,
             bubbleState: interactionModel.bubbleState,
             isPetDragging: interactionModel.isPetDragging
         ) else {
@@ -1570,7 +1568,6 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             self.petHoverActivationWorkItem = nil
             guard self.isPetHovered else { return }
             guard DetachedIslandContentModel.shouldPresentPetHoverPreview(
-                notchOpenTrigger: AppSettings.notchOpenTrigger,
                 bubbleState: self.interactionModel.bubbleState,
                 isPetDragging: self.interactionModel.isPetDragging
             ) else {

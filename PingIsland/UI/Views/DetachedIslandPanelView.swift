@@ -174,17 +174,16 @@ enum DetachedIslandContentModel {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // MARK: 宠物悬停弹出判定（T12-B · 与 docked 共用打开方式设置）
+    // MARK: 宠物悬停弹出判定（T13 · 移除 notchOpenTrigger 门控）
     //
-    // 仅「鼠标移入」档在气泡隐藏且非拖拽时悬停弹出活动会话预览；
-    // 「点击」档保持隐藏（悬停仅视觉反馈），点击/通知弹出不受影响。
+    // 气泡隐藏且非拖拽时悬停弹出活动会话预览（与 docked hover 同
+    // 语义，不再受「面板打开方式」档位门控）；点击/通知弹出不受
+    // 影响。
     // ══════════════════════════════════════════════════════════════
     static func shouldPresentPetHoverPreview(
-        notchOpenTrigger: NotchOpenTrigger,
         bubbleState: DetachedIslandBubbleState,
         isPetDragging: Bool
     ) -> Bool {
-        guard notchOpenTrigger == .hover else { return false }
         guard bubbleState == .hidden else { return false }
         return !isPetDragging
     }

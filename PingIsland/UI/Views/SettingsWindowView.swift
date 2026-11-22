@@ -3369,22 +3369,6 @@ private struct SettingsPanelContentView: View {
                     subtitle: "hover 展开的预览面板会在鼠标离开后自动关闭",
                     isOn: $settings.autoCollapseOnLeave
                 )
-                SettingsLineDivider()
-
-                // ── 面板打开方式：移入弹出 / 仅点击 ──────────────────
-                // 点击模式适合不希望鼠标扫过刘海就弹面板的用户；
-                // dwell 检测照常运行，但打开动作被门控。
-                SettingsInfoLine(
-                    title: "面板打开方式",
-                    subtitle: "鼠标移入=移到刘海附近自动弹出面板；点击=只有点击刘海才展开"
-                ) {
-                    Picker("面板打开方式", selection: $settings.notchOpenTrigger) {
-                        ForEach(NotchOpenTrigger.allCases) { trigger in
-                            Text(appLocalized: trigger.title).tag(trigger)
-                        }
-                    }
-                    .settingsMenuPicker(width: 168)
-                }
             }
 
             SettingsSectionCard(title: "应用") {
