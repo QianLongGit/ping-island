@@ -7,6 +7,7 @@
 
 import AppKit
 import CoreGraphics
+import os
 import SwiftUI
 
 // Corner radius constants
@@ -45,6 +46,13 @@ struct OpenedPanelContentHeightPreferenceKey: PreferenceKey {
 }
 
 struct NotchView: View {
+    // ── T21 插桩：完成弹窗点击链取证通道（os_log）───────────────
+    // 独立 category 便于真机 `log show` 过滤；隐私全 public。
+    private static let tapTrace = Logger(
+        subsystem: "com.wudanwu.pingisland",
+        category: "CompletionTap"
+    )
+
     private static let temporaryReminderMuteDuration: TimeInterval = 10 * 60
     private static let startupDetachmentHintDelay: TimeInterval = 1.8
     private static let detachmentHintRetryDelay: TimeInterval = 0.75
@@ -918,9 +926,16 @@ struct NotchView: View {
                 dismissActiveCompletionNotification(closePanel: true, advanceQueue: true)
             },
             onOpenCompletionNotificationSession: { session in
-                // 点谁开谁：消费当前弹窗（不关面板）→ 跳该会话对话视图
+                // ── T21 插桩：docked 宿主闭包（跳转执行层）────────────
+                Self.tapTrace.notice(
+                    "host.docked session=\(session.sessionId.prefix(8), privacy: .public)"
+                )
+                // 点谁开谁：消费当前弹窗（不关面板）→ 跳该会话对话视图。
+                // 用户显式点击须以 .click 触发（Task 21）：保持 .notification
+                // 会让 resolver 的 notification 分支被并发 attention 抢占，
+                // 点击表现为「无反应」。
                 dismissActiveCompletionNotification(closePanel: false, advanceQueue: true)
-                viewModel.presentNotificationChat(for: session)
+                viewModel.presentChat(for: session, reason: .click)
             }
         )
         .frame(width: notchSize.width - 24) // Fixed width to prevent text reflow

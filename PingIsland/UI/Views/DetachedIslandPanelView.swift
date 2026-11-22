@@ -246,21 +246,14 @@ enum DetachedIslandContentModel {
 
         switch route {
         case .sessionList:
-            // ── 完整面板高度（Task 15）────────────────────────────
-            // 内容随行数增长，上限消费 viewModel.maximumOpenedHeight
-            // （= min(屏幕余量, AppSettings.maxPanelHeight)）：
-            // 用户设 600 就钉在 600，超出部分由列表内部滚动补齐。
+            // ── 完整面板高度（Task 20：恒等于用户上限） ──────────────
+            // 宠物点击展开的完整面板直接钉在 maximumOpenedHeight
+            // （= min(屏幕余量, AppSettings.maxPanelHeight)），行数
+            // 与 usage footer 只影响列表内部滚动，不再撑高/缩矮气泡；
+            // additionalFooterHeight 自此不参与 sessionList 总高
+            // （签名保留，attention/completion 路由同样忽略）。
             let width = min(widthLimit, 448)
-            let sorted = sortedSessions(from: sessions)
-            let estimatedHeight = sessionListEstimatedHeight(
-                for: sorted,
-                compactList: AppSettings.compactSessionList,
-                contentFontSize: CGFloat(AppSettings.contentFontSize)
-            )
-            let height = min(
-                viewModel.maximumOpenedHeight,
-                max(96, estimatedHeight + additionalFooterHeight)
-            )
+            let height = viewModel.maximumOpenedHeight
             return CGSize(width: width, height: height)
         case .hoverDashboard:
             let width = min(widthLimit, 392)
@@ -298,72 +291,11 @@ enum DetachedIslandContentModel {
         }
     }
 
-    // ── 完整面板高度估算（Task 15 紧凑感知）─────────────────────
-    // 行高基准与渲染同源：SessionListCompactMetrics.estimatedRowHeight，
-    // 状态偏移沿用旧表语义（86 = 56+30 / 74 = 56+18 / 46 = 56-10），
-    // 估算贴合实际渲染，消除「面板矮于内容」的裁切感。
-    private static func sessionListEstimatedHeight(
-        for sessions: [SessionState],
-        compactList: Bool,
-        contentFontSize: CGFloat
-    ) -> CGFloat {
-        guard !sessions.isEmpty else { return 96 }
-
-        // ── 子行识别（Task 17）：与列表分组同判定（parent 在全集内）──
-        // 子代理子行走 SubagentAttachmentRow 专属高度模型，不再按
-        // 主行计——消除多子行时「面板矮于内容」的裁切感。
-        let sessionIds = Set(sessions.map(\.sessionId))
-        func isAttachmentRow(_ session: SessionState) -> Bool {
-            guard let parentId = session.explicitSubagentParentSessionId else { return false }
-            return parentId != session.sessionId && sessionIds.contains(parentId)
-        }
-
-        let contentHeight = sessions.reduce(CGFloat(0)) { partial, session in
-            if isAttachmentRow(session) {
-                return partial + SessionListCompactMetrics.estimatedSubagentRowHeight(base: contentFontSize)
-            }
-            return partial + sessionListRowHeight(
-                for: session,
-                compactList: compactList,
-                contentFontSize: contentFontSize
-            )
-        }
-
-        // LazyVStack spacing 只落在主行组之间（子行并入其主行组）
-        let mainRowCount = sessions.filter { !isAttachmentRow($0) }.count
-        let spacing = CGFloat(max(0, mainRowCount - 1)) * 2
-        let verticalInsets: CGFloat = 8
-
-        // 子行容器：每组 padding top 3 + bottom 5；组内子行间距 4
-        let attachmentRows = sessions.filter(isAttachmentRow)
-        let attachmentParentCount = Set(attachmentRows.compactMap(\.explicitSubagentParentSessionId)).count
-        let attachmentContainerInsets = CGFloat(attachmentParentCount) * 8
-        let attachmentIntraSpacing = CGFloat(max(0, attachmentRows.count - attachmentParentCount)) * 4
-
-        return contentHeight + spacing + verticalInsets
-            + attachmentContainerInsets + attachmentIntraSpacing
-    }
-
-    private static func sessionListRowHeight(
-        for session: SessionState,
-        compactList: Bool,
-        contentFontSize: CGFloat
-    ) -> CGFloat {
-        let base = SessionListCompactMetrics.estimatedRowHeight(
-            base: contentFontSize,
-            compactList: compactList
-        )
-        if session.needsQuestionResponse || session.needsApprovalResponse || session.needsManualAttention {
-            return base + 30
-        }
-        if session.isExecutionActive {
-            return base + 18
-        }
-        if session.shouldUseMinimalCompactPresentation || session.usesTitleOnlySubagentPresentation {
-            return max(30, base - 10)
-        }
-        return base
-    }
+    // ── 完整面板高度估算已移除（T20 恒定高度）──────────────────
+    // 宠物面板高度恒为 maximumOpenedHeight 后，行数解析式
+    // sessionListEstimatedHeight / sessionListRowHeight 不再被
+    // 消费，随本任务删除；行高模型统一收敛在
+    // SessionListCompactMetrics（列表内部滚动自负其责）。
 
     static func contentWidth(
         for bubbleFrameWidth: CGFloat

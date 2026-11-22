@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 
 private struct SessionCompletionContentHeightPreferenceKey: PreferenceKey {
@@ -378,6 +379,14 @@ struct SessionCompletionNotificationView: View {
     static let maximumAssistantContentHeight: CGFloat = 300
     static let bubbleAssistantLineLimit = 9
 
+    // ── T21 插桩：完成弹窗点击链取证通道 ─────────────────────────
+    // 独立 category 便于真机 `log show` 过滤；隐私全 public（仅含
+    // 会话短标识与布尔状态，无对话内容）。
+    private static let tapTrace = Logger(
+        subsystem: "com.wudanwu.pingisland",
+        category: "CompletionTap"
+    )
+
     // ═══════════════════════════════════════════════════════════════
     // MARK: - 布局度量（紧凑会话列表联动）
     //
@@ -387,13 +396,13 @@ struct SessionCompletionNotificationView: View {
     // ═══════════════════════════════════════════════════════════════
     static func metricsBodyFontSize(base: CGFloat, compactList: Bool) -> CGFloat {
         compactList
-            ? SessionListCompactMetrics.detailFontSize(base: base, compactList: true)
+            ? SessionListCompactMetrics.detailFontSize(base: base)
             : max(12, base)
     }
 
     static func metricsLabelFontSize(base: CGFloat, compactList: Bool) -> CGFloat {
         compactList
-            ? SessionListCompactMetrics.sessionTitleFontSize(base: base, compactList: true)
+            ? SessionListCompactMetrics.sessionTitleFontSize(base: base)
             : max(13, base)
     }
 
@@ -703,6 +712,12 @@ struct SessionCompletionNotificationView: View {
             onHoverChanged(false)
         }
         .onTapGesture {
+            // ── T21 插桩（CompletionTap 通道）：手势层命中点 ──────────
+            // 若真机点击后此行缺失 → 手势未到达视图（命中测试问题）；
+            // 有此行而后续 content.forward 缺失 → 闭包链断裂。
+            Self.tapTrace.notice(
+                "view.tap session=\(notification.session.sessionId.prefix(8), privacy: .public) hasOpenCallback=\(onOpenSession != nil, privacy: .public)"
+            )
             // 单击即「进去看」：有跳转回调则打开会话面板，否则保持旧 dismiss
             if let onOpenSession {
                 onOpenSession()

@@ -11,15 +11,15 @@ import XCTest
 final class SessionCompletionNotificationMetricsTests: XCTestCase {
 
     func testBodyFontSizeCompactTakesDetailFontSizeFromMetricsTable() {
-        // 紧凑正文 = detailFontSize(base: 13, compact) = max(9.5, 10.5) = 10.5
+        // 紧凑正文 = detailFontSize(base: 13) = max(10, 11) = 11（T20 统一）
         XCTAssertEqual(
             SessionCompletionNotificationView.metricsBodyFontSize(base: 13, compactList: true),
-            SessionListCompactMetrics.detailFontSize(base: 13, compactList: true),
+            SessionListCompactMetrics.detailFontSize(base: 13),
             accuracy: 0.01
         )
         XCTAssertEqual(
             SessionCompletionNotificationView.metricsBodyFontSize(base: 13, compactList: true),
-            10.5,
+            11,
             accuracy: 0.01
         )
     }
@@ -34,15 +34,15 @@ final class SessionCompletionNotificationMetricsTests: XCTestCase {
     }
 
     func testLabelFontSizeCompactTakesSessionTitleFontSizeFromMetricsTable() {
-        // 紧凑标签 = sessionTitleFontSize(base: 13, compact) = max(11, 12) = 12（默认零漂移）
+        // 紧凑标签 = sessionTitleFontSize(base: 13) = max(14, 15) = 15（T20 统一）
         XCTAssertEqual(
             SessionCompletionNotificationView.metricsLabelFontSize(base: 13, compactList: true),
-            SessionListCompactMetrics.sessionTitleFontSize(base: 13, compactList: true),
+            SessionListCompactMetrics.sessionTitleFontSize(base: 13),
             accuracy: 0.01
         )
         XCTAssertEqual(
             SessionCompletionNotificationView.metricsLabelFontSize(base: 13, compactList: true),
-            12,
+            15,
             accuracy: 0.01
         )
     }
@@ -58,10 +58,10 @@ final class SessionCompletionNotificationMetricsTests: XCTestCase {
 
     /// Task 17：标签字号必须跟随 contentFontSize（移除写死 base 13）
     func testLabelFontSizeFollowsContentFontSize() {
-        // 紧凑 base=17 → sessionTitleFontSize = max(11, 16) = 16
+        // 紧凑 base=17 → sessionTitleFontSize = max(14, 19) = 19（T20 统一）
         XCTAssertEqual(
             SessionCompletionNotificationView.metricsLabelFontSize(base: 17, compactList: true),
-            16,
+            19,
             accuracy: 0.01
         )
         // 宽松 base=17 → max(13, 17) = 17
@@ -70,10 +70,10 @@ final class SessionCompletionNotificationMetricsTests: XCTestCase {
             17,
             accuracy: 0.01
         )
-        // 紧凑 base=11 → max(11, 10) = 11（clamp 语义与主行一致）
+        // 紧凑 base=11 → max(14, 13) = 14（下限抬到 14，与预览行同源）
         XCTAssertEqual(
             SessionCompletionNotificationView.metricsLabelFontSize(base: 11, compactList: true),
-            11,
+            14,
             accuracy: 0.01
         )
     }

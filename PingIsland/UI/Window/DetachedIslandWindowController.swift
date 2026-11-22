@@ -1,4 +1,5 @@
 import AppKit
+import os
 import Combine
 import SwiftUI
 
@@ -157,6 +158,13 @@ final class DetachedIslandViewController: NSViewController {
 
 @MainActor
 final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate {
+    // ── T21 插桩：完成弹窗点击链取证通道（os_log）───────────────
+    // 独立 category 便于真机 `log show` 过滤；隐私全 public。
+    private static let tapTrace = Logger(
+        subsystem: "com.wudanwu.pingisland",
+        category: "CompletionTap"
+    )
+
     private static let defaultTrailingInset: CGFloat = 32
     private static let defaultBottomInset: CGFloat = 48
     private static let quietBackgroundWindowAlpha: CGFloat = 0.38
@@ -304,9 +312,17 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             self?.dismissActiveCompletionNotification(closeBubble: true, advanceQueue: true)
         }
         hostingController.onOpenCompletionNotificationSession = { [weak self] session in
-            // 点谁开谁：消费当前弹窗（不收气泡）→ 跳该会话对话视图
+            // ── T21 插桩：detached 宿主闭包进入 ──────────────────────
+            DetachedIslandWindowController.tapTrace.notice(
+                "host.detachedTap session=\(session.sessionId.prefix(8), privacy: .public)"
+            )
+            // ── 点谁开谁（Task 21 修正触发语义）────────────────────────
+            // 消费当前弹窗（不收气泡）→ 跳该会话对话视图。
+            // 点击是用户显式动作：必须以 .click 触发呈现——留在
+            // .notification 触发会被 resolver 的 attention 抢占
+            // 分支偷换内容，点击表现为「无反应」。
             self?.dismissActiveCompletionNotification(closeBubble: false, advanceQueue: true)
-            self?.viewModel.presentNotificationChat(for: session)
+            self?.viewModel.presentChat(for: session, reason: .click)
         }
         window.petMouseDownHandler = { [weak self] event in
             self?.handlePetMouseDown(event) ?? false

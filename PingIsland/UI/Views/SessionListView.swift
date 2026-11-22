@@ -47,11 +47,11 @@ struct SessionListView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Text("No sessions")
-                .font(.system(size: SessionListCompactMetrics.sessionTitleFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList), weight: .medium))
+                .font(.system(size: SessionListCompactMetrics.sessionTitleFontSize(base: CGFloat(settings.contentFontSize)), weight: .medium))
                 .foregroundColor(.white.opacity(0.4))
 
             Text("Run Claude Code, Codex CLI, or ChatGPT")
-                .font(.system(size: SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList)))
+                .font(.system(size: SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize))))
                 .foregroundColor(.white.opacity(0.25))
 
             if FeatureFlags.nativeClaudeRuntime || FeatureFlags.nativeCodexRuntime {
@@ -59,7 +59,7 @@ struct SessionListView: View {
                     if FeatureFlags.nativeClaudeRuntime {
                         Button(action: { launchNativeRuntime(.claude) }) {
                             Text("Launch Claude Native")
-                                .font(.system(size: SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList), weight: .semibold))
+                                .font(.system(size: SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize)), weight: .semibold))
                                 .foregroundColor(.white.opacity(0.86))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, settings.compactSessionList ? 5 : 7)
@@ -72,7 +72,7 @@ struct SessionListView: View {
                     if FeatureFlags.nativeCodexRuntime {
                         Button(action: { launchNativeRuntime(.codex) }) {
                             Text("Launch Codex Native")
-                                .font(.system(size: SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList), weight: .semibold))
+                                .font(.system(size: SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize)), weight: .semibold))
                                 .foregroundColor(.white.opacity(0.86))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, settings.compactSessionList ? 5 : 7)
@@ -740,7 +740,7 @@ struct InstanceRow: View {
     }
 
     private var detailFontSize: CGFloat {
-        SessionListCompactMetrics.detailFontSize(base: titleFontSize, compactList: isCompactList)
+        SessionListCompactMetrics.detailFontSize(base: titleFontSize)
     }
 
     private var detailsEnabled: Bool {
@@ -772,14 +772,14 @@ struct InstanceRow: View {
     }
 
     private var projectTitleFontSize: CGFloat {
-        SessionListCompactMetrics.projectTitleFontSize(base: titleFontSize, compactList: isCompactList)
+        SessionListCompactMetrics.projectTitleFontSize(base: titleFontSize)
     }
 
     private var sessionTitleFontSize: CGFloat {
         if usesSingleLineCompactLayout {
             return max(11, titleFontSize - 1)
         }
-        return SessionListCompactMetrics.sessionTitleFontSize(base: titleFontSize, compactList: isCompactList)
+        return SessionListCompactMetrics.sessionTitleFontSize(base: titleFontSize)
     }
 
     var body: some View {
@@ -1639,18 +1639,20 @@ enum SessionListRowClickBehavior {
 // subagent），与列表级紧凑开关正交叠加。
 // ═════════════════════════════════════════════════════════════════
 enum SessionListCompactMetrics {
-    // ── 字号（base = contentFontSize，默认 13） ───────────────────
-    // 紧凑：标题 12 / 项目名·正文 10.5；宽松：14 / 12 / 11
-    static func sessionTitleFontSize(base: CGFloat, compactList: Bool) -> CGFloat {
-        compactList ? max(11, base - 1) : max(12, base + 1)
+    // ── 行字号（T20：与 hover 预览面板完全同源，密度不缩字号） ──
+    // 主标题 max(14, base+2) / 项目名 max(12, base) / 详情
+    // max(10, base-2)：完整面板与 hover dashboard 的行文字同大，
+    // compactSessionList 只管行距/行数/头像，不再压字号。
+    static func sessionTitleFontSize(base: CGFloat) -> CGFloat {
+        max(14, base + 2)
     }
 
-    static func projectTitleFontSize(base: CGFloat, compactList: Bool) -> CGFloat {
-        compactList ? max(10.5, base - 2.5) : max(11, base - 1)
+    static func projectTitleFontSize(base: CGFloat) -> CGFloat {
+        max(12, base)
     }
 
-    static func detailFontSize(base: CGFloat, compactList: Bool) -> CGFloat {
-        compactList ? max(9.5, base - 2.5) : max(11, base - 2)
+    static func detailFontSize(base: CGFloat) -> CGFloat {
+        max(10, base - 2)
     }
 
     // ── 行距 ──────────────────────────────────────────────────────
@@ -1718,12 +1720,12 @@ enum SessionListCompactMetrics {
         compactList ? 18 : 22
     }
 
-    // ── 行高估算（设计契约：紧凑 ≤ 40pt） ────────────────────────
+    // ── 行高估算（设计契约：紧凑 ≤ 45pt） ────────────────────────
     // 模型 = 行 padding×2 + 标题行 + (间距 + 预览行×limit)；
     // 文本行高按字号 1.25 倍近似，宽松版含预览行距 3。
     static func estimatedRowHeight(base: CGFloat, compactList: Bool) -> CGFloat {
-        let title = sessionTitleFontSize(base: base, compactList: compactList)
-        let detail = detailFontSize(base: base, compactList: compactList)
+        let title = sessionTitleFontSize(base: base)
+        let detail = detailFontSize(base: base)
         let padding = rowVerticalPadding(compactList: compactList, singleLine: false)
         let lineFactor: CGFloat = 1.25
         if compactList {

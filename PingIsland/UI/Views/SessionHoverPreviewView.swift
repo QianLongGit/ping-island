@@ -340,6 +340,8 @@ private struct SessionHoverCompactRow: View {
     }
 
     private var rowContent: some View {
+        // ── 行字号（T20 同源）：与完整面板 InstanceRow 共用
+        // SessionListCompactMetrics 三档公式，两侧行文字逐字同大。
         HStack(alignment: .center, spacing: density.rowSpacing) {
             HoverProviderGlyph(session: session)
 
@@ -347,23 +349,23 @@ private struct SessionHoverCompactRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: density.badgeSpacing) {
                     if !usesTitleOnlySubagentPresentation && !session.shouldHideProjectContextInUI {
                         Text(session.projectName)
-                            .font(.system(size: max(12, settings.contentFontSize), weight: .semibold))
+                            .font(.system(size: SessionListCompactMetrics.projectTitleFontSize(base: CGFloat(settings.contentFontSize)), weight: .semibold))
                             .foregroundColor(.white.opacity(0.88))
 
                         Text("·")
-                            .font(.system(size: max(12, settings.contentFontSize), weight: .semibold))
+                            .font(.system(size: SessionListCompactMetrics.projectTitleFontSize(base: CGFloat(settings.contentFontSize)), weight: .semibold))
                             .foregroundColor(.white.opacity(0.36))
                     }
 
                     Text(usesTitleOnlySubagentPresentation ? session.titleOnlySubagentDisplayTitle : session.displayTitle)
-                        .font(.system(size: max(14, settings.contentFontSize + 2), weight: .bold))
+                        .font(.system(size: SessionListCompactMetrics.sessionTitleFontSize(base: CGFloat(settings.contentFontSize)), weight: .bold))
                         .foregroundColor(.white)
                         .lineLimit(1)
 
                     // 远程会话追加「 · 主机名」低亮度徽章（与列表 T9 同语义）
                     HoverSessionHostBadge.badgeView(
                         session: session,
-                        projectNameFontSize: max(12, settings.contentFontSize),
+                        projectNameFontSize: SessionListCompactMetrics.projectTitleFontSize(base: CGFloat(settings.contentFontSize)),
                         endpoints: remoteManager.endpoints
                     )
                 }
@@ -821,17 +823,24 @@ private struct HoverSessionPreviewLines: View {
     }
 
     var body: some View {
+        // ── 详情行字号（T20 同源）：compact 档与完整面板行共用
+        // SessionListCompactMetrics.detailFontSize（= max(10, base-2)），
+        // 非紧凑档（单会话预览旧形态）保留原式 max(11, base-1)。
         VStack(alignment: .leading, spacing: compact ? 4 : 8) {
             ForEach(lines) { line in
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if let prefix = line.prefix {
                         Text(prefix)
-                            .font(.system(size: compact ? max(10, settings.contentFontSize - 2) : max(11, settings.contentFontSize - 1), weight: .semibold))
+                            .font(.system(size: compact
+                                ? SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize))
+                                : max(11, settings.contentFontSize - 1), weight: .semibold))
                             .foregroundColor(line.prefixColor)
                     }
 
                     Text(line.text)
-                        .font(.system(size: compact ? max(10, settings.contentFontSize - 2) : max(11, settings.contentFontSize - 1), weight: .medium))
+                        .font(.system(size: compact
+                            ? SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize))
+                            : max(11, settings.contentFontSize - 1), weight: .medium))
                         .foregroundColor(line.color)
                         .lineLimit(compact ? 1 : 2)
                 }

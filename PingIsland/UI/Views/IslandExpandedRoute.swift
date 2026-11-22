@@ -30,11 +30,16 @@ enum IslandExpandedRouteResolver {
     ) -> IslandExpandedRoute {
         switch trigger {
         case .notification:
-            if let session = highestPriorityAttentionSession(from: sessions) {
-                return .attentionNotification(session)
-            }
+            // ── 完成通知激活期的并发抢占修正（Task 21）────────────────
+            // 完成弹窗已展示给用户时，任一会话转为 needsPromptNotification
+            // 不得静默偷换通知卡——被换上的 attention 卡没有点击手势，
+            // 用户点击将无任何反应。completion 优先保持展示；其消费后
+            // （点击/超时/hover 离开）attention 分支照常接管。
             if let activeCompletionNotification {
                 return .completionNotification(activeCompletionNotification)
+            }
+            if let session = highestPriorityAttentionSession(from: sessions) {
+                return .attentionNotification(session)
             }
         case .click, .hover, .pinnedList:
             break
@@ -46,11 +51,12 @@ enum IslandExpandedRouteResolver {
 
         switch (surface, trigger) {
         case (.docked, .notification):
-            if let session = highestPriorityAttentionSession(from: sessions) {
-                return .attentionNotification(session)
-            }
+            // ── 与先行 trigger 分支保持同一优先级语义（Task 21）──────
             if let activeCompletionNotification {
                 return .completionNotification(activeCompletionNotification)
+            }
+            if let session = highestPriorityAttentionSession(from: sessions) {
+                return .attentionNotification(session)
             }
             return .sessionList
         case (.docked, .hover), (.floating, .hover):
@@ -59,11 +65,12 @@ enum IslandExpandedRouteResolver {
             }
             return .hoverDashboard
         case (.floating, .notification):
-            if let session = highestPriorityAttentionSession(from: sessions) {
-                return .attentionNotification(session)
-            }
+            // ── 与 docked 分支保持同一优先级语义（Task 21）──────────
             if let activeCompletionNotification {
                 return .completionNotification(activeCompletionNotification)
+            }
+            if let session = highestPriorityAttentionSession(from: sessions) {
+                return .attentionNotification(session)
             }
             return .hoverDashboard
         case (_, .click):

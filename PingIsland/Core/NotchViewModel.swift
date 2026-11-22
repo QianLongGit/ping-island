@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import os
 import Combine
 import SwiftUI
 
@@ -37,6 +38,12 @@ enum NotchContentType: Equatable {
 
 @MainActor
 class NotchViewModel: ObservableObject {
+    // ── T21 插桩：完成弹窗点击链取证通道（os_log）───────────────
+    private static let tapTrace = Logger(
+        subsystem: "com.wudanwu.pingisland",
+        category: "CompletionTap"
+    )
+
     // MARK: - Published State
 
     @Published var status: NotchStatus = .closed
@@ -71,8 +78,6 @@ class NotchViewModel: ObservableObject {
     @Published private(set) var hasPhysicalNotch: Bool
 
     private static let defaultClosedHeight = ScreenNotchMetrics.fallbackClosedHeight
-    private static let clickedInstancesPanelWidthRatio: CGFloat = 0.44
-    private static let clickedInstancesPanelMaximumWidth: CGFloat = 520
     private static let detachmentLongPressNarrowedWidthScale: CGFloat = 0.82
     private static let detachmentLongPressMaximumShrink: CGFloat = 56
     @Published private(set) var closedWidth: CGFloat
@@ -183,11 +188,13 @@ class NotchViewModel: ObservableObject {
         case .instances:
             switch style {
             case .docked:
-                // ── 面板高度 = 内容自适应，上限封顶 ───────────────────
-                // 解析式按行数×行高估算内容需求（LazyVStack 的实测
-                // 值会被视口钳制成"自我实现的矮面板"，不可依赖），
-                // 再以 min(需求, 上限) 收口：少量会话时面板贴合
-                // 内容，大量会话时封顶并由列表内部滚动。
+                // ── 面板高度（T20：点击展开恒等于用户上限） ─────────
+                // 用户点击打开的完整面板直接展开到 maxAllowedHeight，
+                // 不再按行数自适应收缩——少会话时面板同样全高，
+                // 列表内容在面板内部滚动；通知自动弹出（openReason
+                // == .notification）保持内容自适应，避免突然全高。
+                // 解析式按行数×行高估算（LazyVStack 实测会被视口
+                // 钳制成"自我实现的矮面板"，不可依赖）。
                 let listHeight = Self.estimatedInstancesPanelHeight(
                     instanceRowCount: instanceRowCount,
                     isNotificationPresentationActive: isNotificationPresentationActive,
@@ -210,16 +217,18 @@ class NotchViewModel: ObservableObject {
                         maxAllowedHeight,
                         max(closedHeight + 24, openedMeasuredHeight ?? previewEstimate)
                     )
-                } else {
+                } else if openReason == .notification {
                     panelHeight = listHeight
+                } else {
+                    // T20：click / boot / unknown 一律恒定上限高度
+                    panelHeight = maxAllowedHeight
                 }
+                // ── 宽度（T20：完整面板与 hover 预览同宽） ───────────
+                // 完整面板（点击展开）宽度不得窄于 hover 预览面板，
+                // 三态统一 min(屏宽 - 64, 600)，原 0.44×屏宽 cap 520
+                // 的窄档已移除。
                 return CGSize(
-                    width: openReason == .hover
-                        ? min(screenRect.width - 64, 600)
-                        : min(
-                            screenRect.width * Self.clickedInstancesPanelWidthRatio,
-                            Self.clickedInstancesPanelMaximumWidth
-                        ),
+                    width: min(screenRect.width - 64, 600),
                     height: panelHeight
                 )
             case .detached:
@@ -975,6 +984,20 @@ class NotchViewModel: ObservableObject {
     }
 
     func showChat(for session: SessionState) {
+        // ── T21 插桩：VM 层会话面板呈现入口（含点击/自动两路）──
+        // 只打 case 标签摘要（复用 NotchContentType.id 语义）：严禁
+        // String(describing:) —— 它会全量反射 SessionState 携带的
+        // 对话内容（chatItems/previewText/conversationInfo），以
+        // public 隐私持久写入系统日志属于隐私泄漏。
+        let contentTypeSummary: String
+        if case .chat(let current) = contentType {
+            contentTypeSummary = "chat-\(current.sessionId.prefix(8))"
+        } else {
+            contentTypeSummary = "instances"
+        }
+        Self.tapTrace.notice(
+            "vm.showChat session=\(session.sessionId.prefix(8), privacy: .public) contentType=\(contentTypeSummary, privacy: .public)"
+        )
         currentChatSession = session
         openedMeasuredHeight = nil
 
@@ -1004,6 +1027,10 @@ class NotchViewModel: ObservableObject {
     /// Surface a session from an automatic notification without collapsing first.
     /// This keeps attention-driven panel refreshes stable when the notch is already open.
     func presentNotificationChat(for session: SessionState) {
+        // ── T21 插桩：自动通知链路的会话呈现（区别于点击链）──
+        Self.tapTrace.notice(
+            "vm.presentNotificationChat session=\(session.sessionId.prefix(8), privacy: .public)"
+        )
         notchOpen(reason: .notification)
         showChat(for: session)
     }

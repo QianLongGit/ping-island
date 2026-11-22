@@ -121,7 +121,7 @@ final class NotchViewModelTests: XCTestCase {
 
             viewModel.presentSessionList(reason: .click)
 
-            XCTAssertEqual(viewModel.openedSize.width, 520)
+            XCTAssertEqual(viewModel.openedSize.width, 600)
             XCTAssertGreaterThan(viewModel.openedSize.width, viewModel.closedSize.width)
         }
     }
@@ -194,7 +194,7 @@ final class NotchViewModelTests: XCTestCase {
             viewModel.syncClosedWidthForTesting(preferredModuleWidth: 128)
 
             XCTAssertEqual(viewModel.closedWidth, 128)
-            XCTAssertEqual(viewModel.openedSize.width, 520)
+            XCTAssertEqual(viewModel.openedSize.width, 600)
         }
     }
 
@@ -277,7 +277,7 @@ final class NotchViewModelTests: XCTestCase {
             XCTAssertEqual(viewModel.windowHeight, 360)
             XCTAssertEqual(viewModel.closedSize, CGSize(width: 398, height: 42))
             XCTAssertNil(viewModel.openedMeasuredHeight)
-            XCTAssertEqual(viewModel.openedSize.width, 520)
+            XCTAssertEqual(viewModel.openedSize.width, 600)
         }
     }
 
@@ -889,6 +889,27 @@ final class NotchViewModelTests: XCTestCase {
             XCTAssertEqual(recorder.startedMasks, [.mouseMoved, .leftMouseDown, .leftMouseDragged, .leftMouseUp])
             XCTAssertEqual(monitors.mouseLocation.value, .zero)
         }
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    // MARK: - 完成弹窗点击跳转（Task 21）
+    // ═════════════════════════════════════════════════════════════════
+
+    @MainActor
+    func testPresentChatWithClickReasonEscapesNotificationTrigger() {
+        // ── 完成通知弹出期间 openReason == .notification ─────────────
+        // 用户点击跳转属显式动作，必须以 .click 语义呈现——否则
+        // resolver 的 notification 分支会让并发 attention 抢占
+        // .chat 内容，点击表现退化为「无反应」。
+        let viewModel = makeViewModel()
+        viewModel.notchOpen(reason: .notification)
+
+        let session = makeSession(id: "completion-tap")
+        viewModel.presentChat(for: session, reason: .click)
+
+        XCTAssertEqual(viewModel.openReason, .click)
+        XCTAssertEqual(viewModel.contentType, .chat(session))
+        XCTAssertEqual(viewModel.status, .opened)
     }
 
     @MainActor

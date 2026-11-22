@@ -5,53 +5,90 @@ import XCTest
 // MARK: - 会话行紧凑度量（SessionListCompactMetrics 契约）
 //
 // 紧凑模式（settings.compactSessionList，默认开）把会话行从
-// ~64pt 两行预览样式压到 ~40pt 单行预览样式。全部密度参数
-// （字号 / 行距 / 头像 / 徽章间距 / 按钮边长 / 行高估算）集中
-// 在 SessionListCompactMetrics 纯函数表里，本测试锁死契约：
-//   1. compactList = true  → 紧凑值（目标行高 ≤ 40pt）
-//   2. compactList = false → 与旧版宽松样式完全一致的值（零回归）
+// ~70pt 两行预览样式压到 ~42.5pt 单行预览样式。密度参数
+// （行距 / 头像 / 徽章间距 / 按钮边长 / 行高估算）集中在本表，
+// 本测试锁死契约：
+//   1. compactList = true  → 紧凑密度（目标行高 ≤ 45pt）
+//   2. compactList = false → 宽松密度（两行预览，高 ≈70pt）
+// T20：行字号与密度解耦——主标题/项目名/详情三档与 hover
+// 预览面板完全同源（15/13/11 @base13），紧凑不再压字号。
 // ═════════════════════════════════════════════════════════════════
 final class SessionListCompactMetricsTests: XCTestCase {
 
-    // ── 字号：默认 base 13 → 标题 12 / 项目名·正文 10.5 ──────────
+    // ── 行字号（T20：与 hover 预览面板完全同源，密度不缩字号） ──────
+    //
+    // 主标题 max(14, base+2) / 项目名 max(12, base) / 详情 max(10, base-2)，
+    // base=13 → 15 / 13 / 11。compactSessionList 只管行距/行数/头像，
+    // 不再压字号——完整面板与 hover 预览的行文字同大。
 
-    func testSessionTitleFontSizeShrinksUnderCompactAtDefaultBase() {
+    func testSessionTitleFontSizeIgnoresCompactDensityAtDefaultBase() {
         XCTAssertEqual(
-            SessionListCompactMetrics.sessionTitleFontSize(base: 13, compactList: true), 12
+            SessionListCompactMetrics.sessionTitleFontSize(base: 13), 15
         )
         XCTAssertEqual(
-            SessionListCompactMetrics.sessionTitleFontSize(base: 13, compactList: false), 14
+            SessionListCompactMetrics.sessionTitleFontSize(base: 13), 15
         )
     }
 
-    func testDetailFontSizeHitsTenAndAHalfUnderCompactAtDefaultBase() {
+    func testDetailFontSizeIgnoresCompactDensityAtDefaultBase() {
         XCTAssertEqual(
-            SessionListCompactMetrics.detailFontSize(base: 13, compactList: true), 10.5
+            SessionListCompactMetrics.detailFontSize(base: 13), 11
         )
         XCTAssertEqual(
-            SessionListCompactMetrics.detailFontSize(base: 13, compactList: false), 11
+            SessionListCompactMetrics.detailFontSize(base: 13), 11
         )
     }
 
-    func testProjectTitleFontSizeHitsTenAndAHalfUnderCompactAtDefaultBase() {
+    func testProjectTitleFontSizeIgnoresCompactDensityAtDefaultBase() {
         XCTAssertEqual(
-            SessionListCompactMetrics.projectTitleFontSize(base: 13, compactList: true), 10.5
+            SessionListCompactMetrics.projectTitleFontSize(base: 13), 13
         )
         XCTAssertEqual(
-            SessionListCompactMetrics.projectTitleFontSize(base: 13, compactList: false), 12
+            SessionListCompactMetrics.projectTitleFontSize(base: 13), 13
         )
+    }
+
+    func testRowFontSizesMatchHoverDashboardRowFormulas() {
+        // 同源锁：完整面板行字号必须逐档等于 hover dashboard 行公式
+        // 主标题 max(14, base+2) / 项目名 max(12, base) / 详情 max(10, base-2)
+        for base in [CGFloat(11), 13, 17] {
+            XCTAssertEqual(
+                SessionListCompactMetrics.sessionTitleFontSize(base: base),
+                max(14, base + 2)
+            )
+            XCTAssertEqual(
+                SessionListCompactMetrics.projectTitleFontSize(base: base),
+                max(12, base)
+            )
+            XCTAssertEqual(
+                SessionListCompactMetrics.detailFontSize(base: base),
+                max(10, base - 2)
+            )
+            XCTAssertEqual(
+                SessionListCompactMetrics.sessionTitleFontSize(base: base),
+                max(14, base + 2)
+            )
+            XCTAssertEqual(
+                SessionListCompactMetrics.projectTitleFontSize(base: base),
+                max(12, base)
+            )
+            XCTAssertEqual(
+                SessionListCompactMetrics.detailFontSize(base: base),
+                max(10, base - 2)
+            )
+        }
     }
 
     func testFontSizeFloorsSurviveAtMinimumBase() {
-        // base=11（contentFontSize 下限）时紧凑值不得塌缩到不可读
+        // base=11（contentFontSize 下限）时统一值不得塌缩到不可读
         XCTAssertGreaterThanOrEqual(
-            SessionListCompactMetrics.sessionTitleFontSize(base: 11, compactList: true), 11
+            SessionListCompactMetrics.sessionTitleFontSize(base: 11), 13
         )
         XCTAssertGreaterThanOrEqual(
-            SessionListCompactMetrics.detailFontSize(base: 11, compactList: true), 9.5
+            SessionListCompactMetrics.detailFontSize(base: 11), 10
         )
         XCTAssertGreaterThanOrEqual(
-            SessionListCompactMetrics.projectTitleFontSize(base: 11, compactList: true), 10.5
+            SessionListCompactMetrics.projectTitleFontSize(base: 11), 12
         )
     }
 
@@ -119,11 +156,12 @@ final class SessionListCompactMetricsTests: XCTestCase {
         XCTAssertEqual(SessionListCompactMetrics.actionButtonEdge(compactList: true), 18)
     }
 
-    // ── 行高验收：紧凑 ≤ 40pt，且相对宽松版显著下降 ─────────────
+    // ── 行高验收：紧凑 ≤ 45pt（T20 字号统一后 42.5），显著低于宽松 ──
 
-    func testEstimatedRowHeightStaysWithinFortyPointsUnderCompact() {
+    func testEstimatedRowHeightStaysWithinFortyFivePointsUnderCompact() {
+        // T20：字号与 hover 预览统一后，紧凑行 = 8 + 15×1.25 + 2 + 11×1.25 = 42.5
         XCTAssertLessThanOrEqual(
-            SessionListCompactMetrics.estimatedRowHeight(base: 13, compactList: true), 40
+            SessionListCompactMetrics.estimatedRowHeight(base: 13, compactList: true), 45
         )
     }
 

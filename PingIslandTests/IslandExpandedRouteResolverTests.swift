@@ -223,6 +223,82 @@ final class IslandExpandedRouteResolverTests: XCTestCase {
         XCTAssertEqual(route, .completionNotification(notification))
     }
 
+    // ═════════════════════════════════════════════════════════════════
+    // MARK: - 完成通知激活期的并发抢占（Task 21）
+    //
+    // 完成弹窗弹出后，任一会话出现 needsPromptNotification（真机
+    // 日志 2026-11-22 12:46:52 实证：Stop 事件同时 completedReady=
+    // true 与 waitingForInput）→ 旧顺序让 attention 静默偷换通知
+    // 卡，而 attention 卡无 onTapGesture → 用户点击「无反应」。
+    // 修正：completion 已激活时优先保持展示，attention 待消费后接管。
+    // ═════════════════════════════════════════════════════════════════
+
+    func testNotificationKeepsActiveCompletionOverConcurrentPromptAttention() {
+        var prompt = makeSession(id: "terminal-question", phase: .waitingForInput)
+        prompt.suppressInAppPromptControls = true
+        let notification = SessionCompletionNotification(session: prompt, kind: .completed)
+
+        for surface in [IslandExpandedSurface.docked, .floating] {
+            XCTAssertEqual(
+                IslandExpandedRouteResolver.resolve(
+                    surface: surface,
+                    trigger: .notification,
+                    contentType: .instances,
+                    sessions: [prompt],
+                    activeCompletionNotification: notification
+                ),
+                .completionNotification(notification)
+            )
+        }
+    }
+
+    func testNotificationKeepsActiveCompletionOverConcurrentQuestionAttention() {
+        let question = makeSession(
+            id: "question",
+            phase: .waitingForInput,
+            intervention: makeIntervention(
+                id: "question-1",
+                kind: .question,
+                message: "Need your answer"
+            )
+        )
+        let completed = makeSession(id: "completed", phase: .waitingForInput)
+        let notification = SessionCompletionNotification(session: completed, kind: .completed)
+
+        for surface in [IslandExpandedSurface.docked, .floating] {
+            XCTAssertEqual(
+                IslandExpandedRouteResolver.resolve(
+                    surface: surface,
+                    trigger: .notification,
+                    contentType: .instances,
+                    sessions: [completed, question],
+                    activeCompletionNotification: notification
+                ),
+                .completionNotification(notification)
+            )
+        }
+    }
+
+    func testClickTriggerKeepsChatEvenWithConcurrentAttention() {
+        // ── tap 后态（trigger=.click + contentType=.chat）稳定锁 ────
+        // 并发 attention 存在时仍解析为 .chat——锁住点击跳转的
+        // 下游语义，防止未来回退为 notification 触发后被抢占。
+        let session = makeSession(id: "completion-tap", phase: .waitingForInput)
+        var prompt = makeSession(id: "attention", phase: .waitingForInput)
+        prompt.suppressInAppPromptControls = true
+
+        XCTAssertEqual(
+            IslandExpandedRouteResolver.resolve(
+                surface: .docked,
+                trigger: .click,
+                contentType: .chat(session),
+                sessions: [session, prompt],
+                activeCompletionNotification: nil
+            ),
+            .chat(session)
+        )
+    }
+
     private func makeSession(
         id: String,
         phase: SessionPhase,

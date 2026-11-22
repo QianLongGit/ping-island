@@ -1,6 +1,13 @@
+import os
 import SwiftUI
 
 struct IslandOpenedContentView: View {
+    // ── T21 插桩：完成弹窗点击链（os_log 通道）──────────────────
+    static let tapTrace = Logger(
+        subsystem: "com.wudanwu.pingisland",
+        category: "CompletionTap"
+    )
+
     let sessionMonitor: SessionMonitor
     @ObservedObject var viewModel: NotchViewModel
     @ObservedObject private var settings = AppSettings.shared
@@ -75,7 +82,14 @@ struct IslandOpenedContentView: View {
                 presentationStyle: style == .detached ? .bubble : .panel,
                 onHoverChanged: onCompletionNotificationHoverChanged,
                 onDismiss: onDismissCompletionNotification,
-                onOpenSession: { onOpenCompletionNotificationSession(notification.session) }
+                onOpenSession: {
+                    // ── T21 插桩：内容视图转发层 ────────────────────────
+                    // 证明 onOpenSession 闭包接线完好、已进入转发链。
+                    Self.tapTrace.notice(
+                        "content.forward session=\(notification.session.sessionId.prefix(8), privacy: .public)"
+                    )
+                    onOpenCompletionNotificationSession(notification.session)
+                }
             )
             .background(
                 GeometryReader { geometry in

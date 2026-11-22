@@ -39,7 +39,8 @@ final class NotchViewModelPanelSizeTests: XCTestCase {
     }
 
     func testFormulaSingleCompactRowMatchesAnalyticExpectation() {
-        // 1 行紧凑：32 + 12 + 8 + 38.125 = 90.125
+        // 1 行紧凑：32 + 12 + 8 + 42.5 = 94.5
+        // （T20 字号统一后行高 = 8 + 15×1.25 + 2 + 11×1.25 = 42.5）
         let height = NotchViewModel.estimatedInstancesPanelHeight(
             instanceRowCount: 1,
             isNotificationPresentationActive: false,
@@ -49,11 +50,12 @@ final class NotchViewModelPanelSizeTests: XCTestCase {
             maxAllowedHeight: 700
         )
 
-        XCTAssertEqual(height, 90.125, accuracy: 0.01)
+        XCTAssertEqual(height, 94.5, accuracy: 0.01)
     }
 
     func testFormulaSingleRelaxedRowUsesRelaxedRowHeight() {
-        // 1 行宽松：32 + 12 + 8 + 69 = 121
+        // 1 行宽松：32 + 12 + 8 + 70.25 = 122.25
+        // （T20 字号统一后行高 = 16 + 18.75 + 5 + 2×13.75 + 3 = 70.25）
         let height = NotchViewModel.estimatedInstancesPanelHeight(
             instanceRowCount: 1,
             isNotificationPresentationActive: false,
@@ -63,7 +65,7 @@ final class NotchViewModelPanelSizeTests: XCTestCase {
             maxAllowedHeight: 700
         )
 
-        XCTAssertEqual(height, 121, accuracy: 0.01)
+        XCTAssertEqual(height, 122.25, accuracy: 0.01)
     }
 
     func testFormulaExactlyFullContentIsNotCapped() {
@@ -194,12 +196,12 @@ final class NotchViewModelPanelSizeTests: XCTestCase {
             let viewModel = makeViewModel()
             viewModel.beginDetachedPresentation(contentType: .instances)
 
-            // 1 行紧凑：与 docked 同式 32 + 12 + 8 + 38.125 = 90.125
-            // （detached 面板高度链 = panelSize(for: .detached)，
-            //   DetachedIslandPanelView:284 消费；detachedSize 是
-            //   orb 球尺寸，与此无关。）
+            // 1 行紧凑：与 docked 同式 32 + 12 + 8 + 42.5 = 94.5
+            // （T20 字号统一后行高 42.5；detached 面板高度链 =
+            //   panelSize(for: .detached)，DetachedIslandPanelView:284
+            //   消费；detachedSize 是 orb 球尺寸，与此无关。）
             viewModel.updateInstanceRowCount(1)
-            XCTAssertEqual(viewModel.panelSize(for: .detached).height, 90.125, accuracy: 0.01)
+            XCTAssertEqual(viewModel.panelSize(for: .detached).height, 94.5, accuracy: 0.01)
 
             // 30 行：解析式 1253.75 → cap 700（不再固定 170 或封顶 300）
             viewModel.updateInstanceRowCount(30)
@@ -276,8 +278,54 @@ final class NotchViewModelPanelSizeTests: XCTestCase {
             viewModel.updateInstanceRowCount(1)
             viewModel.notchOpen(reason: .click)
 
-            // 宽松 1 行：32 + 12 + 8 + 69 = 121
-            XCTAssertEqual(viewModel.openedSize.height, 121, accuracy: 0.01)
+            // T20：宽松密度只影响行内排版，不影响面板总高（恒 700）
+            XCTAssertEqual(viewModel.openedSize.height, 700, accuracy: 0.01)
+        }
+    }
+
+    // ── T20：点击展开的完整面板高度恒等于用户上限 ──────────────────
+
+    func testDockedInstancesClickedHeightPinnedToMaximumOpenedHeight() async {
+        await MainActor.run {
+            let originalMaxPanelHeight = AppSettings.maxPanelHeight
+            defer { AppSettings.maxPanelHeight = originalMaxPanelHeight }
+            AppSettings.maxPanelHeight = 700
+
+            let viewModel = makeViewModel()
+
+            // 0 行（原最小可用高 56）也必须直接展开到上限
+            viewModel.updateInstanceRowCount(0)
+            viewModel.presentSessionList(reason: .click)
+            XCTAssertEqual(viewModel.openedSize.height, 700, accuracy: 0.01)
+
+            // 1 行（原内容自适应 90.125）恒 700
+            viewModel.updateInstanceRowCount(1)
+            viewModel.presentSessionList(reason: .click)
+            XCTAssertEqual(viewModel.openedSize.height, 700, accuracy: 0.01)
+
+            // 30 行（原本被 cap 到 700）恒 700，与少行无差别
+            viewModel.updateInstanceRowCount(30)
+            viewModel.presentSessionList(reason: .click)
+            XCTAssertEqual(viewModel.openedSize.height, 700, accuracy: 0.01)
+        }
+    }
+
+    func testDockedInstancesClickedWidthMatchesHoverPreviewWidth() async {
+        await MainActor.run {
+            let viewModel = makeViewModel()
+
+            // hover 预览宽度基准：min(1440 - 64, 600) = 600
+            viewModel.presentSessionList(reason: .click)
+            XCTAssertEqual(viewModel.openedSize.width, 600, accuracy: 0.01)
+
+            // 完整面板（click）宽度不得窄于 hover 预览（原 0.44×1440 cap 520 被移除）
+            let hoverViewModel = makeViewModel()
+            hoverViewModel.notchOpen(reason: .hover)
+            XCTAssertGreaterThanOrEqual(
+                viewModel.openedSize.width,
+                hoverViewModel.openedSize.width,
+                "完整面板宽度不得窄于 hover 预览面板"
+            )
         }
     }
 
