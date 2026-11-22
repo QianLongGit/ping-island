@@ -47,11 +47,11 @@ struct SessionListView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Text("No sessions")
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: SessionListCompactMetrics.sessionTitleFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList), weight: .medium))
                 .foregroundColor(.white.opacity(0.4))
 
             Text("Run Claude Code, Codex CLI, or ChatGPT")
-                .font(.system(size: 11))
+                .font(.system(size: SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList)))
                 .foregroundColor(.white.opacity(0.25))
 
             if FeatureFlags.nativeClaudeRuntime || FeatureFlags.nativeCodexRuntime {
@@ -59,7 +59,7 @@ struct SessionListView: View {
                     if FeatureFlags.nativeClaudeRuntime {
                         Button(action: { launchNativeRuntime(.claude) }) {
                             Text("Launch Claude Native")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.system(size: SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList), weight: .semibold))
                                 .foregroundColor(.white.opacity(0.86))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, settings.compactSessionList ? 5 : 7)
@@ -72,7 +72,7 @@ struct SessionListView: View {
                     if FeatureFlags.nativeCodexRuntime {
                         Button(action: { launchNativeRuntime(.codex) }) {
                             Text("Launch Codex Native")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.system(size: SessionListCompactMetrics.detailFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList), weight: .semibold))
                                 .foregroundColor(.white.opacity(0.86))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, settings.compactSessionList ? 5 : 7)
@@ -476,6 +476,11 @@ private struct SubagentAttachmentRow: View {
     let onActivate: () -> Void
     let onChat: () -> Void
 
+    // ── 字号跟随设置（Task 17）：与主行 metrics 同源派生 ─────────
+    @ObservedObject private var settings = AppSettings.shared
+
+    private var contentBase: CGFloat { CGFloat(settings.contentFontSize) }
+
     @State private var isHovered = false
 
     private var title: String {
@@ -569,7 +574,7 @@ private struct SubagentAttachmentRow: View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: SessionListCompactMetrics.subagentTitleFontSize(base: contentBase), weight: .semibold))
                     .foregroundColor(.white.opacity(0.84))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -577,10 +582,10 @@ private struct SubagentAttachmentRow: View {
                 if let detail {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text("└")
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .font(.system(size: SessionListCompactMetrics.subagentDetailFontSize(base: contentBase), weight: .medium, design: .monospaced))
                             .foregroundColor(.white.opacity(0.18))
                         Text(detail)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: SessionListCompactMetrics.subagentDetailFontSize(base: contentBase), weight: .medium))
                             .foregroundColor(.white.opacity(0.42))
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -591,12 +596,12 @@ private struct SubagentAttachmentRow: View {
 
             HStack(alignment: .center, spacing: 5) {
                 Text(ageLabel)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .font(.system(size: SessionListCompactMetrics.subagentAgeFontSize(base: contentBase), weight: .semibold, design: .monospaced))
                     .monospacedDigit()
                     .foregroundColor(.white.opacity(0.34))
 
                 Text("SUBAGENT")
-                    .font(.system(size: 7, weight: .semibold, design: .monospaced))
+                    .font(.system(size: SessionListCompactMetrics.subagentBadgeFontSize(base: contentBase), weight: .semibold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.9))
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
@@ -988,7 +993,7 @@ struct InstanceRow: View {
     private var avatarStatusBadge: some View {
         if session.connectionState == .disconnected {
             Image(systemName: "wifi.slash")
-                .font(.system(size: 7, weight: .bold))
+                .font(.system(size: SessionListCompactMetrics.avatarBadgeSymbolFontSize(base: CGFloat(settings.contentFontSize), original: 7), weight: .bold))
                 .foregroundColor(Color.white.opacity(0.56))
                 .frame(width: 14, height: 14)
                 .background(Color.black.opacity(0.92))
@@ -1026,7 +1031,7 @@ struct InstanceRow: View {
 
     private func statusBadge(symbol: String) -> some View {
         Text(symbol)
-            .font(.system(size: 8, weight: .black))
+            .font(.system(size: SessionListCompactMetrics.avatarBadgeSymbolFontSize(base: CGFloat(settings.contentFontSize), original: 8), weight: .black))
             .foregroundColor(statusAccentColor)
             .frame(width: 14, height: 14)
             .background(Color.black.opacity(0.92))
@@ -1732,6 +1737,47 @@ enum SessionListCompactMetrics {
             + leadingTextSpacing(compactList: false, singleLine: false)
             + 2 * detail * lineFactor
             + 3
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // MARK: 子代理子行与头像角标（Task 17 · 字号跟随设置）
+    //
+    // SubagentAttachmentRow 原全写死（标题 12 / 详情 11 / 年龄 10 /
+    // 徽章 7），头像角标符号同样写死（wifi 7 / spinner 8）。统一改
+    // 为 contentFontSize（base）派生，base=13 时与旧值零漂移；
+    // 子行本身即紧凑呈现，不叠加列表级 compactList 开关。
+    // ══════════════════════════════════════════════════════════════
+
+    // ── 子行字号：偏移派生（base 13 → 12/11/10），下限防塌缩 ──
+    static func subagentTitleFontSize(base: CGFloat) -> CGFloat {
+        max(10, base - 1)
+    }
+
+    static func subagentDetailFontSize(base: CGFloat) -> CGFloat {
+        max(9, base - 2)
+    }
+
+    static func subagentAgeFontSize(base: CGFloat) -> CGFloat {
+        max(8, base - 3)
+    }
+
+    // SUBAGENT 胶囊小徽章：按 base 比例缩放并夹在 [5, 9]
+    static func subagentBadgeFontSize(base: CGFloat) -> CGFloat {
+        min(9, max(5, base * 7 / 13))
+    }
+
+    // ── 头像角标符号（14×14 定边圆内）：original = 旧写死值 ──────
+    // 随 base 比例缩放并夹在 [original-1, original+2]，防溢出圆框
+    static func avatarBadgeSymbolFontSize(base: CGFloat, original: CGFloat) -> CGFloat {
+        min(original + 2, max(original - 1, original * base / 13))
+    }
+
+    // ── 子行高估算：与渲染字号同源联动 ──────────────────────────
+    // 模型 = vertical padding 6×2 + 标题×1.25 + 间距 2 + 详情×1.25
+    static func estimatedSubagentRowHeight(base: CGFloat) -> CGFloat {
+        let title = subagentTitleFontSize(base: base)
+        let detail = subagentDetailFontSize(base: base)
+        return 6 * 2 + title * 1.25 + 2 + detail * 1.25
     }
 }
 

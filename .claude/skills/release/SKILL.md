@@ -1,13 +1,13 @@
 ---
 name: release
-description: Use when 改动 ping-island 功能后需要完整发布——重打 Mac DMG、本机交叉编译 Linux bridge（glibc 快验 + musl 双 arch 静态）、按 App 端资产契约打 4 个 zip、创建双 tag GitHub release 并上传全部资产、curl 下载链端到端验证、刷新本机 ~/.ping-island 部署。触发词：发布、发版、release、出新包、DMG、bridge 编译、musl、上传资产、打 tag。
+description: Use when 改动 ping-island 功能后需要完整发布——重打 Mac DMG、本机交叉编译 Linux bridge（glibc 快验 + musl 双 arch 静态）、按 App 端资产契约打 4 个 zip、创建单 tag GitHub release 并上传全部资产、curl 下载链端到端验证、刷新本机 ~/.ping-island 部署。触发词：发布、发版、release、出新包、DMG、bridge 编译、musl、上传资产、打 tag。
 ---
 
 # ping-island 发布技能
 
 一键完成整套发布：**Mac DMG 重打 → Linux bridge 双 arch 编译 → 资产打包 → tag/release 创建上传 → 下载链验证 → 本机部署刷新 → 用户收尾清单**。
 
-所有命令与坑位均经 2026-11-21/22 全链实战验证（v0.33.0 / v0.33.0-kero.1 双 tag 发布）。
+所有命令与坑位均经 2026-11-21/22 全链实战验证（v0.33.0–v0.33.4 五轮发布；2026-11-22 起按用户要求收敛为**单 tag**：只发 `v<版本>`，不再建 `-kero.1` 变体 tag——此前双 tag 已全部合并清理）。
 
 ## 流程总览
 
@@ -17,7 +17,7 @@ description: Use when 改动 ping-island 功能后需要完整发布——重打
 | 1 | Mac DMG（构建机） | `PingIsland-$VER-release-unsigned.dmg` + `.zip` | EXIT_0、产物大小、sha256 |
 | 2 | Linux bridge 编译（本机） | glibc 快验版 + musl 双 arch 静态版 | EXIT_0、`file` 断言静态链接 |
 | 3 | 资产打包 | 4 个 bridge zip | 内层文件名精确=资产名 |
-| 4 | tag 与 release | 双 tag × 6 资产 | `gh release view` 资产计数 |
+| 4 | tag 与 release | 单 tag × 6 资产 | `gh release view` 资产计数 |
 | 5 | 下载链验证 | sha256 逐字节比对 + 冒烟 | curl 下载 sha 吻合、冒烟 JSON 断言 |
 | 6 | 本机部署刷新 | `~/.ping-island/bin/PingIslandBridge` | `file` 断言 statically linked |
 | 7 | 用户收尾清单 | 输出给用户的提示 | — |
@@ -157,52 +157,48 @@ sha256sum *.zip
 
 ## 第 4 步：tag 与 release（本机 gh）
 
-**双 tag 策略**：
+**单 tag 策略**（2026-11-22 用户裁定：重复 tag 让旁观者困惑，只发一个）：
 
-- `v<精确版本>`（如 `v0.33.0`）——**App bootstrap 的真实拉取路径**（按运行时版本号拼 URL，缺失此 tag = 远端 Linux 机器永远下不到新 bridge）；
-- 人类可读变体 tag（如 `v0.33.0-kero.1`）——标记 fork 特色发布线。
+- 只发 `v<精确版本>`（如 `v0.33.4`）——它同时是 **App bootstrap 的真实拉取路径**（按运行时版本号拼 URL，缺失此 tag = 远端 Linux 机器永远下不到新 bridge）和人类下载入口（notes 直接写在它上面）。
+- **禁止**再建 `v<版本>-kero.1` 之类变体 tag。
 
 版本号变更时：先改 `PingIsland.xcodeproj/project.pbxproj` 的 `MARKETING_VERSION`（4 处），tag 名与 DMG 名随之而变。
 
 ```bash
 cd /home/ql/Development/Project/my-vibeisland/ping-island
-VER=0.33.0                          # ← 第 0 步读出的版本号
-TAG_MAIN="v$VER"                    # App 拉取路径
-TAG_HUMAN="v$VER-kero.1"            # 人类可读变体（后缀按需递增）
+VER=0.33.4                          # ← 第 0 步读出的版本号
+TAG="v$VER"                         # 唯一 tag：机器通道+人类入口合一
 
 # ⓪ release notes（若 ~/pi-release-notes.md 不存在，先生成——双语简介：本次改动亮点/资产清单/未签名提示）
-# ⚠️ 换版本发布前先删旧 notes 文件，否则会原样复用上一版（标题仍是旧 TAG_HUMAN）
+# ⚠️ 换版本发布前先删旧 notes 文件，否则会原样复用上一版（标题仍是旧 TAG）
 [ -f ~/pi-release-notes.md ] || cat > ~/pi-release-notes.md <<EOF
-# PingIsland $TAG_HUMAN
+# PingIsland $TAG
 
 - 说明：本 fork 发布版（未签名，安装需在系统设置放行）
 - 资产：Mac DMG/ZIP + Linux bridge musl 双 arch（musl 主名 + legacy 兜底名）
 EOF
 
-# ① 创建（note 逻辑同 tag；--title 用人类可读名）
-gh release create "$TAG_MAIN" --title "PingIsland $TAG_HUMAN" --notes-file ~/pi-release-notes.md
-gh release create "$TAG_HUMAN" --title "PingIsland $TAG_HUMAN" --notes-file ~/pi-release-notes.md
+# ① 创建（--title 人类可读）
+gh release create "$TAG" --title "PingIsland $TAG" --notes-file ~/pi-release-notes.md
 
-# ② 双 tag 各上传 6 资产（DMG + zip + 4 个 bridge zip）
-for TAG in "$TAG_MAIN" "$TAG_HUMAN"; do
-  gh release upload "$TAG" --clobber \
-    ~/pi-release-assets/PingIsland-$VER-release-unsigned.dmg \
-    ~/pi-release-assets/PingIsland-$VER-release-unsigned.zip \
-    ~/pi-bridge-assets/PingIslandBridge-linux-musl-x86_64.zip \
-    ~/pi-bridge-assets/PingIslandBridge-linux-x86_64.zip \
-    ~/pi-bridge-assets/PingIslandBridge-linux-musl-aarch64.zip \
-    ~/pi-bridge-assets/PingIslandBridge-linux-aarch64.zip
-done
+# ② 上传 6 资产（DMG + zip + 4 个 bridge zip）
+gh release upload "$TAG" --clobber \
+  ~/pi-release-assets/PingIsland-$VER-release-unsigned.dmg \
+  ~/pi-release-assets/PingIsland-$VER-release-unsigned.zip \
+  ~/pi-bridge-assets/PingIslandBridge-linux-musl-x86_64.zip \
+  ~/pi-bridge-assets/PingIslandBridge-linux-x86_64.zip \
+  ~/pi-bridge-assets/PingIslandBridge-linux-musl-aarch64.zip \
+  ~/pi-bridge-assets/PingIslandBridge-linux-aarch64.zip
 ```
 
-验证点：`gh release view "$TAG_MAIN" --json assets -q '.assets | length'` → **6**（双 tag 各验一次）。
+验证点：`gh release view "$TAG" --json assets -q '.assets | length'` → **6**。
 
 ## 第 5 步：验证（证据优先，三层）
 
 ```bash
 VER=0.33.0; TAG_MAIN="v$VER"
 
-# ① 资产清单：双 tag 各 6 资产
+# ① 资产清单：6 资产
 gh release view "$TAG_MAIN" --json assets -q '.assets[].name'
 
 # ② 下载链端到端：curl 公网下载主路径资产 → sha256 与本地构建逐字节比对
@@ -276,7 +272,7 @@ Mac 侧可选防回退 override（App 优先取此文件，跳过 release 下载
 | 2 | musl 链接报找不到 `-lsqlite3` | ld.lld 不吃 LIBRARY_PATH | 把 `libsqlite3.a` cp 进 SDK sysroot `usr/lib/`（toolchain-setup.md §4） |
 | 3 | 命令挂死 / 输出捕获失败 / `EDQUOT` | `/tmp` 是 tmpfs（3.7G），大文件堆满 | 大文件操作一律走 `$HOME`；盘点输出写 home 文件用 Read 读 |
 | 4 | zip 上传后 App 远端装不上 / 解压失败 | 内层文件名 ≠ 资产名，或 zip 内带目录前缀 | 内层名=zip 名去 `.zip`，用 `zip -j` 顶层单文件（第 3 步） |
-| 5 | 远端机器一直用旧 bridge | 缺 `v<精确版本>` tag，或 App 版本与 tag 不一致 | 双 tag 必建；tag 名=App 运行时版本精确拼接（第 4 步） |
+| 5 | 远端机器一直用旧 bridge | 缺 `v<精确版本>` tag，或 App 版本与 tag 不一致 | `v<版本>` tag 必建且唯一；tag 名=App 运行时版本精确拼接（第 4 步） |
 | 6 | 产物 `grep KERO_PANE` 0 命中 | Swift SmallString 内联 | 非缺陷；以运行时冒烟为决定性证据（第 5 步） |
 | 7 | 冒烟对照组误报 kero | 测试 shell 自身运行在 kero，env 泄漏 | 对照组显式 `env -u KERO_PANE`（第 5 步） |
 | 8 | DMG 出包报 AppleScript -1712 | 无头 SSH 无法跑 styled DMG 脚本 | 正常，脚本自动降级 plain DMG，照常取产物 |

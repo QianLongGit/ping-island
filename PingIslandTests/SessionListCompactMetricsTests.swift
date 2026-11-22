@@ -132,4 +132,58 @@ final class SessionListCompactMetricsTests: XCTestCase {
         let compact = SessionListCompactMetrics.estimatedRowHeight(base: 13, compactList: true)
         XCTAssertGreaterThan(relaxed, compact + 20)
     }
+
+    // ══════════════════════════════════════════════════════════════
+    // MARK: 子代理子行与头像角标（Task 17 · 字号跟随设置）
+    //
+    // SubagentAttachmentRow 原全写死（标题 12 / 详情 11 / 年龄 10 /
+    // 徽章 7）；头像角标符号同样写死（wifi 7 / spinner 8）。统一改为
+    // contentFontSize 派生后，base=13 必须与旧值零漂移，且随 base
+    // 缩放、下限不塌缩。
+    // ══════════════════════════════════════════════════════════════
+
+    func testSubagentRowFontSizesMatchLegacyConstantsAtDefaultBase() {
+        // base=13 与旧写死值完全一致：标题 12 / 详情 11 / 年龄 10 / 徽章 7
+        XCTAssertEqual(SessionListCompactMetrics.subagentTitleFontSize(base: 13), 12)
+        XCTAssertEqual(SessionListCompactMetrics.subagentDetailFontSize(base: 13), 11)
+        XCTAssertEqual(SessionListCompactMetrics.subagentAgeFontSize(base: 13), 10)
+        XCTAssertEqual(SessionListCompactMetrics.subagentBadgeFontSize(base: 13), 7, accuracy: 0.01)
+    }
+
+    func testSubagentRowFontSizesFollowBaseChanges() {
+        // base=15：标题 14 / 详情 13 / 年龄 12 / 徽章 ≈8.08（随设置缩放）
+        XCTAssertEqual(SessionListCompactMetrics.subagentTitleFontSize(base: 15), 14)
+        XCTAssertEqual(SessionListCompactMetrics.subagentDetailFontSize(base: 15), 13)
+        XCTAssertEqual(SessionListCompactMetrics.subagentAgeFontSize(base: 15), 12)
+        XCTAssertEqual(SessionListCompactMetrics.subagentBadgeFontSize(base: 15), 7 * 15 / 13, accuracy: 0.01)
+    }
+
+    func testSubagentRowFontSizesRespectBoundsAtMinimumBase() {
+        // base=11（contentFontSize 下限）：标题≥10 / 详情≥9 / 年龄≥8 / 徽章≥5
+        XCTAssertGreaterThanOrEqual(SessionListCompactMetrics.subagentTitleFontSize(base: 11), 10)
+        XCTAssertGreaterThanOrEqual(SessionListCompactMetrics.subagentDetailFontSize(base: 11), 9)
+        XCTAssertGreaterThanOrEqual(SessionListCompactMetrics.subagentAgeFontSize(base: 11), 8)
+        XCTAssertGreaterThanOrEqual(SessionListCompactMetrics.subagentBadgeFontSize(base: 11), 5)
+    }
+
+    func testAvatarBadgeSymbolFontSizeZeroDriftAtDefaultBase() {
+        // base=13 与旧写死值一致：wifi 7 / spinner 8
+        XCTAssertEqual(SessionListCompactMetrics.avatarBadgeSymbolFontSize(base: 13, original: 7), 7, accuracy: 0.01)
+        XCTAssertEqual(SessionListCompactMetrics.avatarBadgeSymbolFontSize(base: 13, original: 8), 8, accuracy: 0.01)
+    }
+
+    func testAvatarBadgeSymbolFontSizeScalesWithinBounds() {
+        // base=17 封顶 original+2 / base=11 兜底 original-1（不溢出 14×14 圆）
+        XCTAssertEqual(SessionListCompactMetrics.avatarBadgeSymbolFontSize(base: 17, original: 7), 9, accuracy: 0.01)
+        XCTAssertEqual(SessionListCompactMetrics.avatarBadgeSymbolFontSize(base: 17, original: 8), 10, accuracy: 0.01)
+        XCTAssertEqual(SessionListCompactMetrics.avatarBadgeSymbolFontSize(base: 11, original: 7), 6, accuracy: 0.01)
+        XCTAssertEqual(SessionListCompactMetrics.avatarBadgeSymbolFontSize(base: 11, original: 8), 7, accuracy: 0.01)
+    }
+
+    func testEstimatedSubagentRowHeightMatchesRenderModel() {
+        // 模型 = vertical padding 6×2 + 标题×1.25 + 间距 2 + 详情×1.25
+        // base=13 → 12+15+2+13.75 = 42.75；base=15 → 12+17.5+2+16.25 = 47.75
+        XCTAssertEqual(SessionListCompactMetrics.estimatedSubagentRowHeight(base: 13), 42.75, accuracy: 0.01)
+        XCTAssertEqual(SessionListCompactMetrics.estimatedSubagentRowHeight(base: 15), 47.75, accuracy: 0.01)
+    }
 }

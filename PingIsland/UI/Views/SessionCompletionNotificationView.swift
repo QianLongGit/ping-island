@@ -391,10 +391,10 @@ struct SessionCompletionNotificationView: View {
             : max(12, base)
     }
 
-    static func metricsLabelFontSize(compactList: Bool) -> CGFloat {
+    static func metricsLabelFontSize(base: CGFloat, compactList: Bool) -> CGFloat {
         compactList
-            ? SessionListCompactMetrics.sessionTitleFontSize(base: 13, compactList: true)
-            : 13
+            ? SessionListCompactMetrics.sessionTitleFontSize(base: base, compactList: true)
+            : max(13, base)
     }
 
     static func metricsSectionVerticalPadding(compactList: Bool) -> CGFloat {
@@ -409,6 +409,7 @@ struct SessionCompletionNotificationView: View {
     let presentationStyle: SessionCompletionNotificationPresentationStyle
     let onHoverChanged: (Bool) -> Void
     let onDismiss: () -> Void
+    let onOpenSession: (() -> Void)?
 
     @ObservedObject private var settings = AppSettings.shared
     @State private var measuredAssistantContentHeight: CGFloat = 0
@@ -417,12 +418,14 @@ struct SessionCompletionNotificationView: View {
         notification: SessionCompletionNotification,
         presentationStyle: SessionCompletionNotificationPresentationStyle = .panel,
         onHoverChanged: @escaping (Bool) -> Void,
-        onDismiss: @escaping () -> Void
+        onDismiss: @escaping () -> Void,
+        onOpenSession: (() -> Void)? = nil
     ) {
         self.notification = notification
         self.presentationStyle = presentationStyle
         self.onHoverChanged = onHoverChanged
         self.onDismiss = onDismiss
+        self.onOpenSession = onOpenSession
     }
 
     private var session: SessionState { notification.session }
@@ -532,7 +535,7 @@ struct SessionCompletionNotificationView: View {
     private var assistantSection: some View {
         HStack(alignment: .top, spacing: 10) {
             Text(assistantLabelText)
-                .font(.system(size: Self.metricsLabelFontSize(compactList: settings.compactSessionList), weight: .semibold))
+                .font(.system(size: Self.metricsLabelFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList), weight: .semibold))
                 .foregroundColor(assistantPrefixColor)
 
             assistantMessageView
@@ -543,13 +546,70 @@ struct SessionCompletionNotificationView: View {
 
     private var containerCornerRadius: CGFloat { 16 }
 
+    // ═══════════════════════════════════════════════════════════════
+    // MARK: - 会话标识行（T16 · projectName · displayTitle · 主机徽章）
+    //
+    // 弹窗须自证归属：复用会话列表行的两段名层级与主机徽章语义
+    // （本地/远程一目了然）；子代理/网关会话退化为单段标题。
+    // ═══════════════════════════════════════════════════════════════
+    private var identityBadgeText: String {
+        SessionCompletionNotificationIdentity.hostBadgeText(
+            for: session,
+            endpoints: RemoteConnectorManager.shared.endpoints
+        )
+    }
+
+    private var identityTitleLine: Text {
+        let titleFontSize = Self.metricsLabelFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList)
+        let separator = Text(" · ")
+            .font(.system(size: titleFontSize, weight: .bold))
+            .foregroundColor(.white.opacity(0.34))
+
+        var line: Text
+        if SessionCompletionNotificationIdentity.usesSingleTitlePresentation(for: session) {
+            // 单段名退化：子代理取专属单段标题，网关取会话标题
+            let title = session.usesTitleOnlySubagentPresentation
+                ? session.titleOnlySubagentDisplayTitle
+                : session.displayTitle
+            line = Text(title)
+                .font(.system(size: titleFontSize, weight: .bold))
+                .foregroundColor(.white)
+        } else {
+            line = Text(session.projectName)
+                .font(.system(size: titleFontSize, weight: .semibold))
+                .foregroundColor(.white.opacity(0.84))
+            + separator
+            + Text(session.displayTitle)
+                .font(.system(size: titleFontSize, weight: .bold))
+                .foregroundColor(.white)
+        }
+
+        // 主机徽章收尾：低亮度 0.5，与会话行 T9 徽章同语义
+        return line
+            + separator
+            + Text(identityBadgeText)
+                .font(.system(size: titleFontSize, weight: .semibold))
+                .foregroundColor(.white.opacity(0.5))
+    }
+
+    private var identityHeaderView: some View {
+        identityTitleLine
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .padding(.horizontal, Self.metricsSectionHorizontalPadding(compactList: settings.compactSessionList))
+            .padding(.top, Self.metricsSectionVerticalPadding(compactList: settings.compactSessionList))
+            .padding(.bottom, 4)
+    }
+
     @ViewBuilder
     private var contentCard: some View {
         let content = VStack(alignment: .leading, spacing: 0) {
+            identityHeaderView
+
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 if let userText {
                     Text(appLocalized: "你：")
-                        .font(.system(size: Self.metricsLabelFontSize(compactList: settings.compactSessionList), weight: .semibold))
+                        .font(.system(size: Self.metricsLabelFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList), weight: .semibold))
                         .foregroundColor(.white.opacity(0.48))
 
                     Text(userText)
@@ -562,7 +622,7 @@ struct SessionCompletionNotificationView: View {
                 }
 
                 Text(AppLocalization.string(notification.kind.statusLabelKey))
-                    .font(.system(size: Self.metricsLabelFontSize(compactList: settings.compactSessionList), weight: .bold))
+                    .font(.system(size: Self.metricsLabelFontSize(base: CGFloat(settings.contentFontSize), compactList: settings.compactSessionList), weight: .bold))
                     .foregroundColor(.white.opacity(0.5))
                     .fixedSize()
             }
@@ -643,7 +703,12 @@ struct SessionCompletionNotificationView: View {
             onHoverChanged(false)
         }
         .onTapGesture {
-            onDismiss()
+            // 单击即「进去看」：有跳转回调则打开会话面板，否则保持旧 dismiss
+            if let onOpenSession {
+                onOpenSession()
+            } else {
+                onDismiss()
+            }
         }
     }
 }
@@ -651,4 +716,27 @@ struct SessionCompletionNotificationView: View {
 enum SessionCompletionNotificationPresentationStyle: Equatable {
     case panel
     case bubble
+}
+
+// ═════════════════════════════════════════════════════════════════
+// MARK: - 标识行纯函数（T16）
+//
+// 会话归属文案判定与视图解耦：主机徽章本地/远程/endpoint 展示名
+// 三态、单段名退化判定，均为无副作用纯函数（可单测锁死）。
+// ═════════════════════════════════════════════════════════════════
+enum SessionCompletionNotificationIdentity {
+    /// 主机徽章：本地恒「本地」；远程优先 endpoint 展示名/host 回退
+    /// （复用 T12-A HoverSessionHostBadge 判定），无 host 提示兜底「远程」。
+    static func hostBadgeText(
+        for session: SessionState,
+        endpoints: [RemoteEndpoint]
+    ) -> String {
+        guard session.isRemoteSession else { return "本地" }
+        return HoverSessionHostBadge.badgeTitle(for: session, endpoints: endpoints) ?? "远程"
+    }
+
+    /// 单段名退化：子代理/网关会话沿用列表行同款单段标题展示。
+    static func usesSingleTitlePresentation(for session: SessionState) -> Bool {
+        session.usesTitleOnlySubagentPresentation || session.shouldHideProjectContextInUI
+    }
 }

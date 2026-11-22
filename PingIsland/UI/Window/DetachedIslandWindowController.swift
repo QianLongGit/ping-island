@@ -97,6 +97,9 @@ final class DetachedIslandViewController: NSViewController {
     var onDismissCompletionNotification: () -> Void = {} {
         didSet { refreshRootViewIfLoaded() }
     }
+    var onOpenCompletionNotificationSession: (SessionState) -> Void = { _ in } {
+        didSet { refreshRootViewIfLoaded() }
+    }
     private var hostingView: TransparentHostingView<AppLocalizedRootView<DetachedIslandPanelView>>!
 
     init(
@@ -140,7 +143,8 @@ final class DetachedIslandViewController: NSViewController {
                 onBubbleHoverChanged: onBubbleHoverChanged,
                 onAttentionActionCompleted: onAttentionActionCompleted,
                 onCompletionNotificationHoverChanged: onCompletionNotificationHoverChanged,
-                onDismissCompletionNotification: onDismissCompletionNotification
+                onDismissCompletionNotification: onDismissCompletionNotification,
+                onOpenCompletionNotificationSession: onOpenCompletionNotificationSession
             )
         }
     }
@@ -298,6 +302,11 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         }
         hostingController.onDismissCompletionNotification = { [weak self] in
             self?.dismissActiveCompletionNotification(closeBubble: true, advanceQueue: true)
+        }
+        hostingController.onOpenCompletionNotificationSession = { [weak self] session in
+            // 点谁开谁：消费当前弹窗（不收气泡）→ 跳该会话对话视图
+            self?.dismissActiveCompletionNotification(closeBubble: false, advanceQueue: true)
+            self?.viewModel.presentNotificationChat(for: session)
         }
         window.petMouseDownHandler = { [weak self] event in
             self?.handlePetMouseDown(event) ?? false
@@ -1445,6 +1454,9 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         case .hidden:
             return
         case .hoverPreview:
+            // 点击完成通知打开的会话面板由用户显式持有——contentType
+            // 已指向 .chat，不得以「无通知/无 attention」为由收起气泡
+            if case .chat = viewModel.contentType { return }
             guard DetachedIslandContentModel.canPresentBubble(
                 from: sessionMonitor.instances,
                 mode: .hoverPreview,

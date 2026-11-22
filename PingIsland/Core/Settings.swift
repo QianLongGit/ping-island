@@ -395,6 +395,7 @@ final class AppSettingsStore: ObservableObject {
         static let notificationSound = "notificationSound"
         static let soundEnabled = "soundEnabled"
         static let soundVolume = "soundVolume"
+        static let clientStartupSoundEnabled = "clientStartupSoundEnabled"
         static let temporarilyMuteNotificationsUntil = "temporarilyMuteNotificationsUntil"
         static let keepAwakeMode = "keepAwakeMode"
         static let processingStartSound = "processingStartSound"
@@ -485,6 +486,15 @@ final class AppSettingsStore: ObservableObject {
             guard !isBootstrapping else { return }
             defaults.set(soundEnabled, forKey: Keys.soundEnabled)
             recordTelemetrySettingChange(key: Keys.soundEnabled, value: soundEnabled.description)
+        }
+    }
+
+    // ── 客户端启动音独立开关（Task 19）：仅门控启动自动播放，默认开启，不桥接 bridge config ──
+    @Published var clientStartupSoundEnabled: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            defaults.set(clientStartupSoundEnabled, forKey: Keys.clientStartupSoundEnabled)
+            recordTelemetrySettingChange(key: Keys.clientStartupSoundEnabled, value: clientStartupSoundEnabled.description)
         }
     }
 
@@ -1470,6 +1480,12 @@ final class AppSettingsStore: ObservableObject {
             exists: persistedKeys.contains(Keys.soundEnabled),
             default: true
         ))
+        _clientStartupSoundEnabled = Published(initialValue: Self.boolValue(
+            from: defaults,
+            key: Keys.clientStartupSoundEnabled,
+            exists: persistedKeys.contains(Keys.clientStartupSoundEnabled),
+            default: true
+        ))
         _soundVolume = Published(initialValue: Self.doubleValue(
             from: defaults,
             key: Keys.soundVolume,
@@ -1811,6 +1827,11 @@ enum AppSettings {
         set { shared.soundEnabled = newValue }
     }
 
+    static var clientStartupSoundEnabled: Bool {
+        get { shared.clientStartupSoundEnabled }
+        set { shared.clientStartupSoundEnabled = newValue }
+    }
+
     static var soundVolume: Double {
         get { shared.soundVolume }
         set { shared.soundVolume = newValue }
@@ -2122,7 +2143,9 @@ enum AppSettings {
         AppSoundPlayback.shared.play(sound, volume: Float(soundVolume))
     }
 
+    // ── 客户端启动音独立开关（Task 19）：关闭时在此短路，AppDelegate/试听共用入口零改动 ──
     static func playClientStartupSound() {
+        guard clientStartupSoundEnabled else { return }
         AppSoundFeedback.play(.clientStarted)
     }
 

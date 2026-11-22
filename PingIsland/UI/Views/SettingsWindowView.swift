@@ -7309,10 +7309,16 @@ private struct SoundStartupLine: View {
 
             SoundEventTextBlock(
                 title: "固定启动音",
-                subtitle: "使用内置 8-bit 启动旋律。应用启动时会自动播放，也可以在这里试听。"
+                subtitle: "使用内置 8-bit 启动旋律。开启后应用启动时自动播放，也可以在这里试听。"
             )
 
             Spacer(minLength: 14)
+
+            // ── 启动音开关（Task 19）：关闭后启动不再自动播放，试听随 guard 同门 ──
+            Toggle("", isOn: $settings.clientStartupSoundEnabled)
+                .labelsHidden()
+                .settingsCompactSwitch(scale: 0.88)
+                .frame(width: 36, alignment: .center)
 
             SoundPreviewButton(isEnabled: isPreviewEnabled, action: preview)
         }

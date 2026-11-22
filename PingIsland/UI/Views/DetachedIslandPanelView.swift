@@ -169,8 +169,14 @@ enum DetachedIslandContentModel {
             ?? sortedSessions(from: sessions).first
     }
 
-    static func activeCount(from sessions: [SessionState]) -> Int {
-        sessions.filter(\.isExecutionActive).count
+    // ══════════════════════════════════════════════════════════════
+    // MARK: 徽章计数（Task 18 · 徽章=可见会话数）
+    //
+    // 缩小胶囊徽章显示可见会话总数（与点开列表行数一致），
+    // 不再只数执行中的会话；空列表由上层 count>0 隐藏徽章。
+    // ══════════════════════════════════════════════════════════════
+    static func visibleSessionCount(from sessions: [SessionState]) -> Int {
+        sessions.count
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -240,11 +246,19 @@ enum DetachedIslandContentModel {
 
         switch route {
         case .sessionList:
+            // ── 完整面板高度（Task 15）────────────────────────────
+            // 内容随行数增长，上限消费 viewModel.maximumOpenedHeight
+            // （= min(屏幕余量, AppSettings.maxPanelHeight)）：
+            // 用户设 600 就钉在 600，超出部分由列表内部滚动补齐。
             let width = min(widthLimit, 448)
             let sorted = sortedSessions(from: sessions)
-            let estimatedHeight = sessionListEstimatedHeight(for: sorted)
+            let estimatedHeight = sessionListEstimatedHeight(
+                for: sorted,
+                compactList: AppSettings.compactSessionList,
+                contentFontSize: CGFloat(AppSettings.contentFontSize)
+            )
             let height = min(
-                viewModel.screenRect.height - 160,
+                viewModel.maximumOpenedHeight,
                 max(96, estimatedHeight + additionalFooterHeight)
             )
             return CGSize(width: width, height: height)
@@ -284,28 +298,71 @@ enum DetachedIslandContentModel {
         }
     }
 
-    private static func sessionListEstimatedHeight(for sessions: [SessionState]) -> CGFloat {
+    // ── 完整面板高度估算（Task 15 紧凑感知）─────────────────────
+    // 行高基准与渲染同源：SessionListCompactMetrics.estimatedRowHeight，
+    // 状态偏移沿用旧表语义（86 = 56+30 / 74 = 56+18 / 46 = 56-10），
+    // 估算贴合实际渲染，消除「面板矮于内容」的裁切感。
+    private static func sessionListEstimatedHeight(
+        for sessions: [SessionState],
+        compactList: Bool,
+        contentFontSize: CGFloat
+    ) -> CGFloat {
         guard !sessions.isEmpty else { return 96 }
 
-        let contentHeight = sessions.reduce(CGFloat(0)) { partial, session in
-            partial + sessionListRowHeight(for: session)
+        // ── 子行识别（Task 17）：与列表分组同判定（parent 在全集内）──
+        // 子代理子行走 SubagentAttachmentRow 专属高度模型，不再按
+        // 主行计——消除多子行时「面板矮于内容」的裁切感。
+        let sessionIds = Set(sessions.map(\.sessionId))
+        func isAttachmentRow(_ session: SessionState) -> Bool {
+            guard let parentId = session.explicitSubagentParentSessionId else { return false }
+            return parentId != session.sessionId && sessionIds.contains(parentId)
         }
-        let spacing = CGFloat(max(0, sessions.count - 1)) * 2
+
+        let contentHeight = sessions.reduce(CGFloat(0)) { partial, session in
+            if isAttachmentRow(session) {
+                return partial + SessionListCompactMetrics.estimatedSubagentRowHeight(base: contentFontSize)
+            }
+            return partial + sessionListRowHeight(
+                for: session,
+                compactList: compactList,
+                contentFontSize: contentFontSize
+            )
+        }
+
+        // LazyVStack spacing 只落在主行组之间（子行并入其主行组）
+        let mainRowCount = sessions.filter { !isAttachmentRow($0) }.count
+        let spacing = CGFloat(max(0, mainRowCount - 1)) * 2
         let verticalInsets: CGFloat = 8
+
+        // 子行容器：每组 padding top 3 + bottom 5；组内子行间距 4
+        let attachmentRows = sessions.filter(isAttachmentRow)
+        let attachmentParentCount = Set(attachmentRows.compactMap(\.explicitSubagentParentSessionId)).count
+        let attachmentContainerInsets = CGFloat(attachmentParentCount) * 8
+        let attachmentIntraSpacing = CGFloat(max(0, attachmentRows.count - attachmentParentCount)) * 4
+
         return contentHeight + spacing + verticalInsets
+            + attachmentContainerInsets + attachmentIntraSpacing
     }
 
-    private static func sessionListRowHeight(for session: SessionState) -> CGFloat {
+    private static func sessionListRowHeight(
+        for session: SessionState,
+        compactList: Bool,
+        contentFontSize: CGFloat
+    ) -> CGFloat {
+        let base = SessionListCompactMetrics.estimatedRowHeight(
+            base: contentFontSize,
+            compactList: compactList
+        )
         if session.needsQuestionResponse || session.needsApprovalResponse || session.needsManualAttention {
-            return 86
+            return base + 30
         }
         if session.isExecutionActive {
-            return 74
+            return base + 18
         }
         if session.shouldUseMinimalCompactPresentation || session.usesTitleOnlySubagentPresentation {
-            return 46
+            return max(30, base - 10)
         }
-        return 56
+        return base
     }
 
     static func contentWidth(
@@ -650,6 +707,7 @@ struct DetachedIslandPanelView: View {
     let onAttentionActionCompleted: () -> Void
     let onCompletionNotificationHoverChanged: (Bool) -> Void
     let onDismissCompletionNotification: () -> Void
+    var onOpenCompletionNotificationSession: (SessionState) -> Void = { _ in }
 
     private var sortedSessions: [SessionState] {
         DetachedIslandContentModel.sortedSessions(from: sessionMonitor.instances)
@@ -659,8 +717,8 @@ struct DetachedIslandPanelView: View {
         DetachedIslandContentModel.representativeSession(from: sortedSessions)
     }
 
-    private var activeCount: Int {
-        DetachedIslandContentModel.activeCount(from: sortedSessions)
+    private var visibleSessionCount: Int {
+        DetachedIslandContentModel.visibleSessionCount(from: sortedSessions)
     }
 
     private var bubbleContentMode: DetachedIslandBubbleContentMode? {
@@ -823,7 +881,7 @@ struct DetachedIslandPanelView: View {
 
     private var petButton: some View {
         DetachedFloatingPetInteractionView(
-            activeCount: activeCount,
+            activeCount: visibleSessionCount,
             usageWindows: floatingPetUsageWindows,
             mascotKind: compactMascotKind,
             mascotStatus: compactMascotStatus,
@@ -864,7 +922,8 @@ struct DetachedIslandPanelView: View {
                     contentWidthOverride: contentWidth,
                     onAttentionActionCompleted: onAttentionActionCompleted,
                     onCompletionNotificationHoverChanged: onCompletionNotificationHoverChanged,
-                    onDismissCompletionNotification: onDismissCompletionNotification
+                    onDismissCompletionNotification: onDismissCompletionNotification,
+                    onOpenCompletionNotificationSession: onOpenCompletionNotificationSession
                 )
 
                 if shouldShowFloatingUsageFooter {

@@ -34,24 +34,46 @@ final class SessionCompletionNotificationMetricsTests: XCTestCase {
     }
 
     func testLabelFontSizeCompactTakesSessionTitleFontSizeFromMetricsTable() {
-        // 紧凑标签 = sessionTitleFontSize(base: 13, compact) = max(11, 12) = 12
+        // 紧凑标签 = sessionTitleFontSize(base: 13, compact) = max(11, 12) = 12（默认零漂移）
         XCTAssertEqual(
-            SessionCompletionNotificationView.metricsLabelFontSize(compactList: true),
+            SessionCompletionNotificationView.metricsLabelFontSize(base: 13, compactList: true),
             SessionListCompactMetrics.sessionTitleFontSize(base: 13, compactList: true),
             accuracy: 0.01
         )
         XCTAssertEqual(
-            SessionCompletionNotificationView.metricsLabelFontSize(compactList: true),
+            SessionCompletionNotificationView.metricsLabelFontSize(base: 13, compactList: true),
             12,
             accuracy: 0.01
         )
     }
 
     func testLabelFontSizeRelaxedKeepsLegacyValue() {
-        // 宽松标签保持旧值 13
+        // 宽松标签 = max(13, base)，base=13 保持旧值 13
         XCTAssertEqual(
-            SessionCompletionNotificationView.metricsLabelFontSize(compactList: false),
+            SessionCompletionNotificationView.metricsLabelFontSize(base: 13, compactList: false),
             13,
+            accuracy: 0.01
+        )
+    }
+
+    /// Task 17：标签字号必须跟随 contentFontSize（移除写死 base 13）
+    func testLabelFontSizeFollowsContentFontSize() {
+        // 紧凑 base=17 → sessionTitleFontSize = max(11, 16) = 16
+        XCTAssertEqual(
+            SessionCompletionNotificationView.metricsLabelFontSize(base: 17, compactList: true),
+            16,
+            accuracy: 0.01
+        )
+        // 宽松 base=17 → max(13, 17) = 17
+        XCTAssertEqual(
+            SessionCompletionNotificationView.metricsLabelFontSize(base: 17, compactList: false),
+            17,
+            accuracy: 0.01
+        )
+        // 紧凑 base=11 → max(11, 10) = 11（clamp 语义与主行一致）
+        XCTAssertEqual(
+            SessionCompletionNotificationView.metricsLabelFontSize(base: 11, compactList: true),
+            11,
             accuracy: 0.01
         )
     }

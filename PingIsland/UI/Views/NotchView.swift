@@ -916,6 +916,11 @@ struct NotchView: View {
             onCompletionNotificationHoverChanged: handleCompletionNotificationHover,
             onDismissCompletionNotification: {
                 dismissActiveCompletionNotification(closePanel: true, advanceQueue: true)
+            },
+            onOpenCompletionNotificationSession: { session in
+                // 点谁开谁：消费当前弹窗（不关面板）→ 跳该会话对话视图
+                dismissActiveCompletionNotification(closePanel: false, advanceQueue: true)
+                viewModel.presentNotificationChat(for: session)
             }
         )
         .frame(width: notchSize.width - 24) // Fixed width to prevent text reflow

@@ -494,14 +494,29 @@ final class DetachedIslandWindowControllerTests: XCTestCase {
         XCTAssertEqual(DetachedIslandPetMetrics(scale: 12).scale, 10, accuracy: 0.001)
     }
 
-    func testActiveCountOnlyTracksActiveSessions() {
+    func testVisibleSessionCountIncludesIdleSessions() {
+        // T18：徽章=可见会话数——空闲/已结束会话与执行中一律计入
         let sessions = [
             makeSession(id: "processing", phase: .processing),
             makeSession(id: "waiting", phase: .waitingForInput),
             makeSession(id: "ended", phase: .ended)
         ]
 
-        XCTAssertEqual(DetachedIslandContentModel.activeCount(from: sessions), 1)
+        XCTAssertEqual(DetachedIslandContentModel.visibleSessionCount(from: sessions), 3)
+    }
+
+    func testVisibleSessionCountIsZeroWhenNoSessions() {
+        // T18：0 会话得 0——上层以 count>0 隐藏徽章，语义保持
+        XCTAssertEqual(DetachedIslandContentModel.visibleSessionCount(from: []), 0)
+    }
+
+    func testVisibleSessionCountSupportsDoubleDigits() {
+        // T18：两位数值链不回归（≥10 走徽章收字距分支）
+        let sessions = (0..<12).map { index in
+            makeSession(id: "session-\(index)", phase: index == 0 ? .processing : .waitingForInput)
+        }
+
+        XCTAssertEqual(DetachedIslandContentModel.visibleSessionCount(from: sessions), 12)
     }
 
     func testBubblePlacementPriorityPrefersTopLeftWhenItFits() {
@@ -707,6 +722,228 @@ final class DetachedIslandWindowControllerTests: XCTestCase {
         ).height
 
         XCTAssertLessThan(mixedHeight, activeOnlyHeight)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MARK: 完整面板动态高度（Task 15）
+    //
+    // 消费链锚点：宠物点击 → pinnedList → route .sessionList →
+    // DetachedIslandContentModel.layout → bubbleContentSize(.sessionList) →
+    // bubbleFrame → 气泡 .frame(height:)。
+    // 测试必须锁住「公式 → bubbleFrame」整条链，而非只测公式本身
+    // （T13 的教训：公式修了，视图消费点没接，等于没修）。
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// 面板高度上限必须消费用户设置的 maxPanelHeight：
+    /// 内容需求超出上限时，面板钉在 maxPanelHeight（如 600），
+    /// 而不是被 screenRect.height - 160（如 740）放行。
+    func testSessionListBubbleConsumesMaxPanelHeightAsCap() {
+        let originalMaxPanelHeight = AppSettings.maxPanelHeight
+        let originalCompactList = AppSettings.compactSessionList
+        AppSettings.maxPanelHeight = 600
+        AppSettings.compactSessionList = true
+        defer {
+            AppSettings.maxPanelHeight = originalMaxPanelHeight
+            AppSettings.compactSessionList = originalCompactList
+        }
+        let viewModel = makeViewModel()
+        // 15 行活跃会话，估算远超 600 → 高度必须被钉在 600
+        let sessions = (1...15).map { makeSession(id: "active-\($0)", phase: .processing) }
+
+        let height = DetachedIslandContentModel.bubbleContentSize(
+            for: .sessionList,
+            sessions: sessions,
+            viewModel: viewModel
+        ).height
+
+        XCTAssertEqual(height, 600, accuracy: 0.5)
+    }
+
+    /// 内容需求低于上限时，面板高度 = 按紧凑感知行高推导的精确解析值：
+    /// 行高基准取自 SessionListCompactMetrics.estimatedRowHeight（与渲染同源），
+    //  活跃行在此基础上 +18（沿用原 74 = 56 + 18 的偏移语义）。
+    func testSessionListBubbleGrowsWithContentBelowCap() {
+        let originalMaxPanelHeight = AppSettings.maxPanelHeight
+        let originalCompactList = AppSettings.compactSessionList
+        AppSettings.maxPanelHeight = 600
+        AppSettings.compactSessionList = true
+        defer {
+            AppSettings.maxPanelHeight = originalMaxPanelHeight
+            AppSettings.compactSessionList = originalCompactList
+        }
+        let viewModel = makeViewModel()
+        let sessions = (1...3).map { makeSession(id: "active-\($0)", phase: .processing) }
+
+        let expectedRowHeight = SessionListCompactMetrics.estimatedRowHeight(
+            base: 13,
+            compactList: true
+        ) + 18
+        let expectedHeight = max(
+            96,
+            CGFloat(3) * expectedRowHeight + CGFloat(3 - 1) * 2 + 8
+        )
+        let height = DetachedIslandContentModel.bubbleContentSize(
+            for: .sessionList,
+            sessions: sessions,
+            viewModel: viewModel
+        ).height
+
+        XCTAssertEqual(height, expectedHeight, accuracy: 0.5)
+        XCTAssertLessThan(height, 600)
+    }
+
+    /// 行高估算必须随 compactSessionList 设置切换（紧凑感知）：
+    /// 宽松与紧凑两档分别等于对应 SessionListCompactMetrics 公式值。
+    func testSessionListBubbleHeightEstimateIsCompactAware() {
+        let originalCompactList = AppSettings.compactSessionList
+        let originalContentFontSize = AppSettings.contentFontSize
+        AppSettings.compactSessionList = false
+        AppSettings.contentFontSize = 13
+        defer {
+            AppSettings.compactSessionList = originalCompactList
+            AppSettings.contentFontSize = originalContentFontSize
+        }
+        let viewModel = makeViewModel()
+        let sessions = (1...3).map { makeSession(id: "active-\($0)", phase: .processing) }
+
+        func estimatedHeight(compact: Bool) -> CGFloat {
+            let rowHeight = SessionListCompactMetrics.estimatedRowHeight(
+                base: 13,
+                compactList: compact
+            ) + 18
+            return max(96, CGFloat(3) * rowHeight + CGFloat(3 - 1) * 2 + 8)
+        }
+
+        AppSettings.compactSessionList = true
+        let compactHeight = DetachedIslandContentModel.bubbleContentSize(
+            for: .sessionList,
+            sessions: sessions,
+            viewModel: viewModel
+        ).height
+        AppSettings.compactSessionList = false
+        let relaxedHeight = DetachedIslandContentModel.bubbleContentSize(
+            for: .sessionList,
+            sessions: sessions,
+            viewModel: viewModel
+        ).height
+
+        XCTAssertEqual(compactHeight, estimatedHeight(compact: true), accuracy: 0.5)
+        XCTAssertEqual(relaxedHeight, estimatedHeight(compact: false), accuracy: 0.5)
+        XCTAssertGreaterThan(relaxedHeight, compactHeight)
+    }
+
+    /// usage footer 预留高度必须参与面板总高（内容低于上限时逐点传导）。
+    func testSessionListBubbleAddsUsageFooterHeight() {
+        let originalMaxPanelHeight = AppSettings.maxPanelHeight
+        let originalCompactList = AppSettings.compactSessionList
+        AppSettings.maxPanelHeight = 600
+        AppSettings.compactSessionList = true
+        defer {
+            AppSettings.maxPanelHeight = originalMaxPanelHeight
+            AppSettings.compactSessionList = originalCompactList
+        }
+        let viewModel = makeViewModel()
+        let sessions = (1...3).map { makeSession(id: "active-\($0)", phase: .processing) }
+
+        let withoutFooter = DetachedIslandContentModel.bubbleContentSize(
+            for: .sessionList,
+            sessions: sessions,
+            viewModel: viewModel
+        ).height
+        let withFooter = DetachedIslandContentModel.bubbleContentSize(
+            for: .sessionList,
+            sessions: sessions,
+            viewModel: viewModel,
+            additionalFooterHeight: DetachedIslandPanelMetrics.usageFooterReservedHeight
+        ).height
+
+        XCTAssertEqual(
+            withFooter - withoutFooter,
+            DetachedIslandPanelMetrics.usageFooterReservedHeight,
+            accuracy: 0.5
+        )
+    }
+
+    /// 视图消费链：layout 产出的 bubbleFrame 必须原样承载
+    /// bubbleContentSize(.sessionList) 的高度（含 maxPanelHeight 上限）。
+    /// 这是「公式 → 窗口布局」的接线断言，防止公式修了视图不用。
+    func testSessionListLayoutBubbleFrameMatchesContentSize() throws {
+        let originalMaxPanelHeight = AppSettings.maxPanelHeight
+        let originalCompactList = AppSettings.compactSessionList
+        AppSettings.maxPanelHeight = 600
+        AppSettings.compactSessionList = true
+        defer {
+            AppSettings.maxPanelHeight = originalMaxPanelHeight
+            AppSettings.compactSessionList = originalCompactList
+        }
+        let viewModel = makeViewModel()
+        let sessions = (1...15).map { makeSession(id: "active-\($0)", phase: .processing) }
+
+        let contentSize = DetachedIslandContentModel.bubbleContentSize(
+            for: .sessionList,
+            sessions: sessions,
+            viewModel: viewModel
+        )
+        let layout = DetachedIslandContentModel.layout(
+            for: sessions,
+            viewModel: viewModel,
+            bubbleState: .pinned,
+            bubblePlacement: .topLeft
+        )
+        let bubbleFrame = try XCTUnwrap(layout.bubbleFrame)
+
+        XCTAssertEqual(bubbleFrame.height, contentSize.height, accuracy: 0.5)
+        XCTAssertEqual(bubbleFrame.height, 600, accuracy: 0.5)
+    }
+
+    /// 子代理子行必须按 SubagentAttachmentRow 实际模型计入面板高度（Task 17）：
+    /// 子行走 estimatedSubagentRowHeight（≈42.75）而非主行 regular 档（38.125），
+    /// 子行容器 padding（top 3 + bottom 5）与组内 spacing 4 一并计入；
+    /// LazyVStack spacing 只落在主行组之间（1 主行单组 → 组间 spacing 0）。
+    func testSessionListBubbleCountsSubagentAttachmentRows() {
+        let originalMaxPanelHeight = AppSettings.maxPanelHeight
+        let originalCompactList = AppSettings.compactSessionList
+        let originalContentFontSize = AppSettings.contentFontSize
+        AppSettings.maxPanelHeight = 600
+        AppSettings.compactSessionList = true
+        AppSettings.contentFontSize = 13
+        defer {
+            AppSettings.maxPanelHeight = originalMaxPanelHeight
+            AppSettings.compactSessionList = originalCompactList
+            AppSettings.contentFontSize = originalContentFontSize
+        }
+        let viewModel = makeViewModel()
+
+        // 1 主行（processing → active 档 +18）+ 2 挂靠子行（parent 存在于全集）
+        let parent = makeSession(id: "parent", phase: .processing)
+        func makeChild(_ id: String) -> SessionState {
+            var child = makeSession(id: id, phase: .idle)
+            child.codexParentThreadId = "parent"
+            return child
+        }
+        let sessions = [parent, makeChild("child-1"), makeChild("child-2")]
+
+        let expectedParentRow = SessionListCompactMetrics.estimatedRowHeight(
+            base: 13,
+            compactList: true
+        ) + 18
+        let expectedChildRow = SessionListCompactMetrics.estimatedSubagentRowHeight(base: 13)
+        let expectedHeight = max(
+            96,
+            expectedParentRow
+                + 2 * expectedChildRow
+                + 8  // 子行容器 padding（top 3 + bottom 5）
+                + 4  // 组内子行间距（2 子行 → 1 × spacing 4）
+                + 8  // verticalInsets
+        )
+        let height = DetachedIslandContentModel.bubbleContentSize(
+            for: .sessionList,
+            sessions: sessions,
+            viewModel: viewModel
+        ).height
+
+        XCTAssertEqual(height, expectedHeight, accuracy: 0.5)
+        XCTAssertLessThan(height, 600)
     }
 
     func testAttentionBubbleUsesMeasuredHeightBeforeFallback() {

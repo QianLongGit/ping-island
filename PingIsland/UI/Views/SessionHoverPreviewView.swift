@@ -351,7 +351,7 @@ private struct SessionHoverCompactRow: View {
                             .foregroundColor(.white.opacity(0.88))
 
                         Text("·")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: max(12, settings.contentFontSize), weight: .semibold))
                             .foregroundColor(.white.opacity(0.36))
                     }
 

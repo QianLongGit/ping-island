@@ -13,6 +13,7 @@ struct IslandOpenedContentView: View {
     let onAttentionActionCompleted: () -> Void
     let onCompletionNotificationHoverChanged: (Bool) -> Void
     let onDismissCompletionNotification: () -> Void
+    var onOpenCompletionNotificationSession: (SessionState) -> Void = { _ in }
 
     var body: some View {
         routeContent
@@ -73,7 +74,8 @@ struct IslandOpenedContentView: View {
                 notification: notification,
                 presentationStyle: style == .detached ? .bubble : .panel,
                 onHoverChanged: onCompletionNotificationHoverChanged,
-                onDismiss: onDismissCompletionNotification
+                onDismiss: onDismissCompletionNotification,
+                onOpenSession: { onOpenCompletionNotificationSession(notification.session) }
             )
             .background(
                 GeometryReader { geometry in

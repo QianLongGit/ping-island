@@ -269,7 +269,10 @@ class NotchViewModel: ObservableObject {
         )
     }
 
-    private var maximumOpenedHeight: CGFloat {
+    // ── 面板高度上限（Task 15 起 detached 气泡共用） ──────────────
+    // 同时叠加两类约束：用户设置（maxPanelHeight，clamp 480-700）
+    // 与物理屏幕余量（screenRect.height - 120）。
+    var maximumOpenedHeight: CGFloat {
         let maxPanelHeight = CGFloat(AppSettings.maxPanelHeight)
         let screenLimit = screenRect.height - 120
 
