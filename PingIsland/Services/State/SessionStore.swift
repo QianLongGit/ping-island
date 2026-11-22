@@ -544,6 +544,9 @@ actor SessionStore {
         // hook-carried turn boundaries and final replies as conversation state.
         processRemoteCodexHookConversation(event: event, session: &session)
 
+        // 远程会话标题（Task 11）：wire 透传值注入 summary，每事件刷新
+        Self.applyRemoteConversationTitle(event.conversationTitle, to: &session)
+
         let shouldPreserveEndedStopForAnsweredQuestion =
             event.status == "ended"
             && event.event == "Stop"
@@ -1037,6 +1040,45 @@ actor SessionStore {
         default:
             break
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 远程会话标题透传（Task 11）
+    //
+    // 远程转写 jsonl 在 SSH 主机上，本地权威来源
+    // ConversationParser 在 Mac 侧读不到（远程会话不走
+    // processFileUpdate），displayTitle 第 2 级因此断链、右段
+    // 回退 projectName。bridge 从远程转写尾部（≤128KB seek）读
+    // 出最新 custom-title/summary，经 wire 顶层字段
+    // conversationTitle 送达，此处注入 conversationInfo.summary
+    // ——displayTitle 既有回退链零改动即恢复真实标题。
+    //
+    // ▸ 有值：每次事件都刷新（custom-title 每轮重写，取新弃旧）
+    // ▸ nil/空白：不覆盖已存在值（旧 bridge 兼容，标题不闪没）
+    // ▸ 本地路径事件恒 nil：ConversationParser 权威，无双写竞争
+    // ═══════════════════════════════════════════════════════════
+
+    /// 将远程标题注入会话状态（纯函数，事件管道与测试共用）。
+    nonisolated static func applyRemoteConversationTitle(
+        _ title: String?,
+        to session: inout SessionState
+    ) {
+        guard let title = title?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty else {
+            return
+        }
+        guard session.conversationInfo.summary != title else {
+            return  // 值未变：跳过重建，避免无谓的 Equatable 抖动
+        }
+        // ConversationInfo 字段不可变——整值重建，其余字段原样保留
+        session.conversationInfo = ConversationInfo(
+            summary: title,
+            lastMessage: session.conversationInfo.lastMessage,
+            lastMessageRole: session.conversationInfo.lastMessageRole,
+            lastToolName: session.conversationInfo.lastToolName,
+            firstUserMessage: session.conversationInfo.firstUserMessage,
+            lastUserMessageDate: session.conversationInfo.lastUserMessageDate
+        )
     }
 
     private func processRemoteCodexHookConversation(event: HookEvent, session: inout SessionState) {

@@ -73,6 +73,9 @@ final class DetachedIslandViewController: NSViewController {
     var onPetTap: () -> Void = {} {
         didSet { refreshRootViewIfLoaded() }
     }
+    var onPetHoverChanged: (Bool) -> Void = { _ in } {
+        didSet { refreshRootViewIfLoaded() }
+    }
     var onPetDragStarted: () -> Void = {} {
         didSet { refreshRootViewIfLoaded() }
     }
@@ -130,6 +133,7 @@ final class DetachedIslandViewController: NSViewController {
                 bubbleViewState: bubbleViewState,
                 onClose: onClose,
                 onPetTap: onPetTap,
+                onPetHoverChanged: onPetHoverChanged,
                 onPetDragStarted: onPetDragStarted,
                 onPetDragChanged: onPetDragChanged,
                 onPetDragEnded: onPetDragEnded,
@@ -174,6 +178,8 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     private var interactionActivationWorkItem: DispatchWorkItem?
     private var bubbleVisibilityWorkItem: DispatchWorkItem?
     private var bubbleHoverGraceWorkItem: DispatchWorkItem?
+    private var petHoverActivationWorkItem: DispatchWorkItem?
+    private var isPetHovered = false
     private var floatingSettingsHintDismissWorkItem: DispatchWorkItem?
     private var completionNotificationDismissWorkItem: DispatchWorkItem?
     private var delayedManualAttentionWorkItem: DispatchWorkItem?
@@ -280,6 +286,9 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         }
         hostingController.onBubbleHoverChanged = { [weak self] isHovering in
             self?.handleBubbleHoverChanged(isHovering)
+        }
+        hostingController.onPetHoverChanged = { [weak self] isHovering in
+            self?.handlePetHoverChanged(isHovering)
         }
         hostingController.onAttentionActionCompleted = { [weak self] in
             self?.dismissAttentionBubble()
@@ -615,6 +624,9 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         bubbleVisibilityWorkItem = nil
         bubbleHoverGraceWorkItem?.cancel()
         bubbleHoverGraceWorkItem = nil
+        petHoverActivationWorkItem?.cancel()
+        petHoverActivationWorkItem = nil
+        isPetHovered = false
         floatingSettingsHintDismissWorkItem?.cancel()
         floatingSettingsHintDismissWorkItem = nil
         completionNotificationDismissWorkItem?.cancel()
@@ -1522,6 +1534,71 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     private func handleBubbleHoverChanged(_ isHovering: Bool) {
         guard isHovering else { return }
         cancelBubbleHoverGraceTimer()
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // MARK: 宠物悬停弹出（T12-B · notchOpenTrigger 统一门控）
+    //
+    // 「鼠标移入」档：悬停驻留后弹出活动会话预览（与 docked hover
+    // 手感一致）；「点击」档不弹出，点击/通知弹出保持原语义。
+    // 悬停离开即取消未触发的驻留计时；弹出前复查气泡仍隐藏且
+    // 存在可展示内容（活动会话/待处理通知）。
+    // ══════════════════════════════════════════════════════════════
+    private func handlePetHoverChanged(_ isHovering: Bool) {
+        isPetHovered = isHovering
+        guard isHovering else {
+            cancelPetHoverActivation()
+            return
+        }
+
+        guard DetachedIslandContentModel.shouldPresentPetHoverPreview(
+            notchOpenTrigger: AppSettings.notchOpenTrigger,
+            bubbleState: interactionModel.bubbleState,
+            isPetDragging: interactionModel.isPetDragging
+        ) else {
+            return
+        }
+
+        schedulePetHoverActivation()
+    }
+
+    private func schedulePetHoverActivation() {
+        cancelPetHoverActivation()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.petHoverActivationWorkItem = nil
+            guard self.isPetHovered else { return }
+            guard DetachedIslandContentModel.shouldPresentPetHoverPreview(
+                notchOpenTrigger: AppSettings.notchOpenTrigger,
+                bubbleState: self.interactionModel.bubbleState,
+                isPetDragging: self.interactionModel.isPetDragging
+            ) else {
+                return
+            }
+
+            let canPresentBubble = DetachedIslandContentModel.canPresentBubble(
+                from: self.sessionMonitor.instances,
+                mode: .hoverPreview,
+                activeCompletionNotification: self.activeCompletionNotification
+            )
+            guard canPresentBubble else { return }
+
+            self.applyBubbleStateChange {
+                self.interactionModel.presentHoverPreview(canPresentBubble: true)
+            }
+        }
+
+        petHoverActivationWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + DetachedIslandPanelMetrics.petHoverActivationDelay,
+            execute: workItem
+        )
+    }
+
+    private func cancelPetHoverActivation() {
+        petHoverActivationWorkItem?.cancel()
+        petHoverActivationWorkItem = nil
     }
 
     private func scheduleBubbleHoverGraceTimer() {

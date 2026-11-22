@@ -378,6 +378,33 @@ struct SessionCompletionNotificationView: View {
     static let maximumAssistantContentHeight: CGFloat = 300
     static let bubbleAssistantLineLimit = 9
 
+    // ═══════════════════════════════════════════════════════════════
+    // MARK: - 布局度量（紧凑会话列表联动）
+    //
+    // 紧凑档开启时字号/内距取自 SessionListCompactMetrics 密度表
+    // （与主列表同源，视觉一致）；关闭时严格保持旧值（13 / 12+ /
+    // 16 / 14），行为零漂移。纯函数便于单测锁死表驱动一致性。
+    // ═══════════════════════════════════════════════════════════════
+    static func metricsBodyFontSize(base: CGFloat, compactList: Bool) -> CGFloat {
+        compactList
+            ? SessionListCompactMetrics.detailFontSize(base: base, compactList: true)
+            : max(12, base)
+    }
+
+    static func metricsLabelFontSize(compactList: Bool) -> CGFloat {
+        compactList
+            ? SessionListCompactMetrics.sessionTitleFontSize(base: 13, compactList: true)
+            : 13
+    }
+
+    static func metricsSectionVerticalPadding(compactList: Bool) -> CGFloat {
+        compactList ? 9 : 14
+    }
+
+    static func metricsSectionHorizontalPadding(compactList: Bool) -> CGFloat {
+        compactList ? 12 : 16
+    }
+
     let notification: SessionCompletionNotification
     let presentationStyle: SessionCompletionNotificationPresentationStyle
     let onHoverChanged: (Bool) -> Void
@@ -417,7 +444,10 @@ struct SessionCompletionNotificationView: View {
     }
 
     private var bodyFontSize: CGFloat {
-        max(12, CGFloat(settings.contentFontSize))
+        Self.metricsBodyFontSize(
+            base: CGFloat(settings.contentFontSize),
+            compactList: settings.compactSessionList
+        )
     }
 
     private var userText: String? {
@@ -502,13 +532,13 @@ struct SessionCompletionNotificationView: View {
     private var assistantSection: some View {
         HStack(alignment: .top, spacing: 10) {
             Text(assistantLabelText)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: Self.metricsLabelFontSize(compactList: settings.compactSessionList), weight: .semibold))
                 .foregroundColor(assistantPrefixColor)
 
             assistantMessageView
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, Self.metricsSectionHorizontalPadding(compactList: settings.compactSessionList))
+        .padding(.vertical, Self.metricsSectionVerticalPadding(compactList: settings.compactSessionList))
     }
 
     private var containerCornerRadius: CGFloat { 16 }
@@ -519,7 +549,7 @@ struct SessionCompletionNotificationView: View {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 if let userText {
                     Text(appLocalized: "你：")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: Self.metricsLabelFontSize(compactList: settings.compactSessionList), weight: .semibold))
                         .foregroundColor(.white.opacity(0.48))
 
                     Text(userText)
@@ -532,12 +562,12 @@ struct SessionCompletionNotificationView: View {
                 }
 
                 Text(AppLocalization.string(notification.kind.statusLabelKey))
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: Self.metricsLabelFontSize(compactList: settings.compactSessionList), weight: .bold))
                     .foregroundColor(.white.opacity(0.5))
                     .fixedSize()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.horizontal, Self.metricsSectionHorizontalPadding(compactList: settings.compactSessionList))
+            .padding(.vertical, Self.metricsSectionVerticalPadding(compactList: settings.compactSessionList))
 
             Rectangle()
                 .fill(Color.white.opacity(0.05))

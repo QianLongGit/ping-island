@@ -385,6 +385,10 @@ struct RemoteHookEventPayload: Codable, Sendable {
     let message: String?
     let expectsResponse: Bool
     let permissionMode: String?
+    // 远程会话标题（Task 11）：远端 bridge 从转写尾部读出的最新
+    // custom-title/summary，顶层透传（camelCase wire 惯例）。可选
+    // 解码——旧 bridge 缺字段/显式 null 均得 nil，双向兼容。
+    let conversationTitle: String?
     let clientInfo: RemoteHookClientInfoPayload
 }
 

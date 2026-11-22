@@ -94,6 +94,76 @@ enum HoverPreviewDensity: Equatable {
         case .detachedCompact: 18
         }
     }
+
+    // ══════════════════════════════════════════════════════════════
+    // MARK: 密度解析（面板表面 × 紧凑列表设置）
+    //
+    // floating 恒为紧凑密度；docked 在「紧凑会话列表」开启时
+    // 复用同一套紧凑数值，保证悬停预览与主列表视觉档位一致。
+    // ══════════════════════════════════════════════════════════════
+    static func resolved(
+        surface: IslandExpandedSurface,
+        compactList: Bool
+    ) -> HoverPreviewDensity {
+        switch surface {
+        case .floating:
+            return .detachedCompact
+        case .docked:
+            return compactList ? .detachedCompact : .regular
+        }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════
+// MARK: - 悬停预览主机名徽章（T12-A）
+//
+// 「项目名 · 会话标题」行尾追加「 · 主机名」：仅远程会话显示，
+// 文案复用 RemoteConnectorManager.resolvedRemoteHostBadgeTitle，
+// 低亮度语义与会话列表 T9 徽章一致；字号跟随所在行项目名字号。
+// ═════════════════════════════════════════════════════════════════
+enum HoverSessionHostBadgeMetrics {
+
+    /// 分隔符/主机名透明度：与会话列表 InstanceRow 徽章同款层级语义
+    static let separatorOpacity: Double = 0.34
+    static let hostOpacity: Double = 0.5
+
+    /// 徽章字号跟随所在行的项目名字号（Header 与紧凑行各自传入）
+    static func fontSize(matching rowProjectNameFontSize: CGFloat) -> CGFloat {
+        rowProjectNameFontSize
+    }
+}
+
+enum HoverSessionHostBadge {
+
+    /// 仅远程会话返回徽章文案；本地会话/空提示返回 nil
+    static func badgeTitle(
+        for session: SessionState,
+        endpoints: [RemoteEndpoint]
+    ) -> String? {
+        guard session.isRemoteSession else { return nil }
+        return RemoteConnectorManager.resolvedRemoteHostBadgeTitle(
+            remoteHost: session.clientInfo.remoteHost,
+            endpoints: endpoints
+        )
+    }
+
+    /// 标题行尾的「 · 主机名」缀段（无徽章时渲染为空）
+    @ViewBuilder
+    static func badgeView(
+        session: SessionState,
+        projectNameFontSize: CGFloat,
+        endpoints: [RemoteEndpoint]
+    ) -> some View {
+        let fontSize = HoverSessionHostBadgeMetrics.fontSize(matching: projectNameFontSize)
+        if let title = badgeTitle(for: session, endpoints: endpoints) {
+            Text(" · ")
+                .font(.system(size: fontSize, weight: .bold))
+                .foregroundColor(.white.opacity(HoverSessionHostBadgeMetrics.separatorOpacity))
+            Text(title)
+                .font(.system(size: fontSize, weight: .semibold))
+                .foregroundColor(.white.opacity(HoverSessionHostBadgeMetrics.hostOpacity))
+        }
+    }
 }
 
 struct SessionHoverDashboardView: View {
@@ -233,6 +303,7 @@ private struct SessionHoverCompactRow: View {
     var density: HoverPreviewDensity = .regular
     let onOpen: () -> Void
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var remoteManager = RemoteConnectorManager.shared
     @State private var isHovered = false
 
     private var usesTitleOnlySubagentPresentation: Bool {
@@ -288,6 +359,13 @@ private struct SessionHoverCompactRow: View {
                         .font(.system(size: max(14, settings.contentFontSize + 2), weight: .bold))
                         .foregroundColor(.white)
                         .lineLimit(1)
+
+                    // 远程会话追加「 · 主机名」低亮度徽章（与列表 T9 同语义）
+                    HoverSessionHostBadge.badgeView(
+                        session: session,
+                        projectNameFontSize: max(12, settings.contentFontSize),
+                        endpoints: remoteManager.endpoints
+                    )
                 }
 
                 if !usesTitleOnlySubagentPresentation {
@@ -666,6 +744,7 @@ private struct HoverSessionHeader: View {
     let session: SessionState
     var showPath: Bool = false
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var remoteManager = RemoteConnectorManager.shared
 
     private var usesCodexSubagentTitleOnlyPresentation: Bool {
         session.usesTitleOnlySubagentPresentation
@@ -692,6 +771,13 @@ private struct HoverSessionHeader: View {
                             .font(.system(size: max(15, settings.contentFontSize + 3), weight: .bold))
                             .foregroundColor(.white)
                             .lineLimit(1)
+
+                        // 远程会话追加「 · 主机名」低亮度徽章（与列表 T9 同语义）
+                        HoverSessionHostBadge.badgeView(
+                            session: session,
+                            projectNameFontSize: max(13, settings.contentFontSize),
+                            endpoints: remoteManager.endpoints
+                        )
                     }
 
                     if usesCodexSubagentTitleOnlyPresentation {

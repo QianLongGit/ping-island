@@ -87,6 +87,10 @@ struct HookEvent: Sendable {
     /// True for a PermissionRequest with `permission_mode=bypassPermissions` (Claude or Codex).
     /// Tool approvals can return immediately; question requests must still wait for an answer.
     let codexBypassPermissions: Bool
+    /// 远程会话标题（Task 11）：仅远程 bridge wire 携带（远端转写尾部
+    /// 读出的 custom-title/summary）。本地路径恒为 nil——本地
+    /// ConversationParser 直读转写是权威来源，此处注入会造成双写竞争。
+    let conversationTitle: String?
 
     nonisolated init(
         sessionId: String,
@@ -106,7 +110,8 @@ struct HookEvent: Sendable {
         bridgeIntervention: SessionIntervention? = nil,
         bridgeExpectsResponse: Bool? = nil,
         suppressInAppPrompt: Bool = false,
-        codexBypassPermissions: Bool = false
+        codexBypassPermissions: Bool = false,
+        conversationTitle: String? = nil
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
@@ -126,6 +131,7 @@ struct HookEvent: Sendable {
         self.bridgeExpectsResponse = bridgeExpectsResponse
         self.suppressInAppPrompt = suppressInAppPrompt
         self.codexBypassPermissions = codexBypassPermissions
+        self.conversationTitle = conversationTitle
     }
 
     nonisolated var sessionPhase: SessionPhase {

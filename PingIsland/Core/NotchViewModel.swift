@@ -46,6 +46,12 @@ class NotchViewModel: ObservableObject {
     @Published var contentType: NotchContentType = .instances
     @Published var isHovering: Bool = false
     @Published private(set) var openedMeasuredHeight: CGFloat?
+    // ── 实例面板内容需求输入（驱动解析式高度公式） ──────────────
+    // instanceRowCount：列表行数（主行+子代理行），由 SessionListView
+    //   上报；isNotificationPresentationActive：完成通知卡是否正
+    //   在面板内呈示，呈示时以通知卡最低高度兜底内容需求。
+    @Published private(set) var instanceRowCount: Int = 0
+    @Published private(set) var isNotificationPresentationActive: Bool = false
     @Published private(set) var isFullscreenEdgeRevealActive = false
     @Published private(set) var isFullscreenPhysicalNotchCompactActive = false
     @Published private(set) var isFullscreenBrowserHiddenActive = false
@@ -183,7 +189,19 @@ class NotchViewModel: ObservableObject {
                             screenRect.width * Self.clickedInstancesPanelWidthRatio,
                             Self.clickedInstancesPanelMaximumWidth
                         ),
-                    height: min(maxAllowedHeight, max(closedHeight + 24, measuredHeight))
+                    // ── 面板高度 = 内容自适应，上限封顶 ───────────────
+                    // 解析式按行数×行高估算内容需求（LazyVStack 的实测
+                    // 值会被视口钳制成"自我实现的矮面板"，不可依赖），
+                    // 再以 min(需求, 上限) 收口：少量会话时面板贴合
+                    // 内容，大量会话时封顶并由列表内部滚动。
+                    height: Self.estimatedInstancesPanelHeight(
+                        instanceRowCount: instanceRowCount,
+                        isNotificationPresentationActive: isNotificationPresentationActive,
+                        compactList: AppSettings.compactSessionList,
+                        contentFontSize: CGFloat(AppSettings.contentFontSize),
+                        closedHeight: closedHeight,
+                        maxAllowedHeight: maxAllowedHeight
+                    )
                 )
             case .detached:
                 return CGSize(
@@ -484,7 +502,11 @@ class NotchViewModel: ObservableObject {
     private func setupEventHandlers() {
         guard let events else { return }
 
-        events.mouseLocation
+        // ── 鼠标位置流：搭 routing 轻量流（interactionOnly 档亦活跃）
+        //    安静能耗档下 mouseLocation 会被 EnergyGovernor 关闸，
+        //    导致 hover 检测"休眠"（移入无反应）；routing 流在所有
+        //    可交互档位恒活跃，作为 hover 的低功耗心跳来源。──────
+        events.mouseRoutingLocation
             .throttle(for: .milliseconds(50), scheduler: DispatchQueue.main, latest: true)
             .sink { [weak self] location in
                 self?.handleMouseMove(location)
@@ -810,6 +832,8 @@ class NotchViewModel: ObservableObject {
     func performDeferredHoverOpenIfNeeded() {
         guard isHovering else { return }
         guard status == .closed || status == .popping else { return }
+        // ── 打开方式门控：click 模式下移入不自动弹出 ──────────────
+        guard AppSettings.notchOpenTrigger == .hover else { return }
         notchOpen(reason: .hover)
     }
 
@@ -955,6 +979,64 @@ class NotchViewModel: ObservableObject {
 
         guard sanitized != openedMeasuredHeight else { return }
         openedMeasuredHeight = sanitized
+    }
+
+    // ── 高度公式输入上报 ────────────────────────────────────────
+    // SessionListView / NotchView 在内容变化时调用；写入触发
+    // objectWillChange → panelSize 重算 → 面板高度随行数自适应。
+
+    func updateInstanceRowCount(_ count: Int) {
+        let sanitized = max(0, count)
+
+        guard sanitized != instanceRowCount else { return }
+        instanceRowCount = sanitized
+    }
+
+    func updateNotificationPresentationActive(_ isActive: Bool) {
+        guard isActive != isNotificationPresentationActive else { return }
+        isNotificationPresentationActive = isActive
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // MARK: - 实例面板高度解析式（内容自适应 · 上限封顶）
+    //
+    // height = min(maxAllowedHeight,
+    //              max(closedHeight + 24,              ← 最小可用高
+    //                  closedHeight + 12 + contentHeight)) ← 需求高
+    // contentHeight = max(列表解析高, 通知卡最低高)
+    // 列表解析高 = 行数 × metrics 行高 + (行数-1) × 行距 2
+    //            + 列表竖直 padding 4 × 2
+    // closedHeight+12 与 NotchView 实测换算（openedMeasuredHeight
+    // = closedHeight + contentHeight + 12）同源，纯函数可测。
+    // ═══════════════════════════════════════════════════════════════
+    static func estimatedInstancesPanelHeight(
+        instanceRowCount: Int,
+        isNotificationPresentationActive: Bool,
+        compactList: Bool,
+        contentFontSize: CGFloat,
+        closedHeight: CGFloat,
+        maxAllowedHeight: CGFloat
+    ) -> CGFloat {
+        let rowCount = max(0, instanceRowCount)
+        let rowHeight = SessionListCompactMetrics.estimatedRowHeight(
+            base: contentFontSize,
+            compactList: compactList
+        )
+        let listSpacing: CGFloat = 2
+        let listVerticalPadding: CGFloat = 8
+        let listHeight = CGFloat(rowCount) * rowHeight
+            + CGFloat(max(0, rowCount - 1)) * listSpacing
+            + listVerticalPadding
+        let notificationFloor = isNotificationPresentationActive
+            ? SessionCompletionNotificationView.minimumContentHeight
+            : 0
+        let contentHeight = max(listHeight, notificationFloor)
+        let chromeOverhead = closedHeight + 12
+
+        return min(
+            maxAllowedHeight,
+            max(closedHeight + 24, chromeOverhead + contentHeight)
+        )
     }
 
     func setManualAttentionActive(_ isActive: Bool) {

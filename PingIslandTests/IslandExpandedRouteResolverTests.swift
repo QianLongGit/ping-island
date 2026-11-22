@@ -21,6 +21,19 @@ final class IslandExpandedRouteResolverTests: XCTestCase {
         XCTAssertTrue(IslandExpandedRouteResolver.activePreviewSessions(from: [stale]).isEmpty)
     }
 
+    func testHoverPreviewIncludesActiveSessionWithoutAnyNotification() {
+        // 纯活跃会话（正在执行、无 attention、无完成通知）必须进入预览
+        // 候选集——通知只是排序信号（shouldSortBeforeInQueue），不是
+        // 入选门槛（T12-C 回归锁：悬停预览展示所有活动会话）。
+        let running = makeSession(id: "running", phase: .processing)
+        let idleRecent = makeSession(id: "idle-recent", phase: .waitingForInput)
+
+        let previewIDs = IslandExpandedRouteResolver.activePreviewSessions(from: [running, idleRecent])
+            .map(\.sessionId)
+
+        XCTAssertEqual(Set(previewIDs), Set(["running", "idle-recent"]))
+    }
+
     func testClickResolvesToSessionList() {
         let route = IslandExpandedRouteResolver.resolve(
             surface: .docked,

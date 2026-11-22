@@ -50,6 +50,10 @@ enum DetachedIslandPanelMetrics {
     static let completionBubbleMinimumHeight: CGFloat = 120
     static let completionBubbleFallbackHeight: CGFloat = 180
 
+    /// 宠物悬停弹出预览的驻留延迟：对齐 docked 非全屏 hover 驻留
+    /// （NotchViewModel.hoverActivationDelay 0.24s），两侧手感一致
+    static let petHoverActivationDelay: TimeInterval = 0.24
+
     @MainActor
     static func petMetrics() -> DetachedIslandPetMetrics {
         petMetrics(scale: AppSettings.floatingPetScale)
@@ -167,6 +171,22 @@ enum DetachedIslandContentModel {
 
     static func activeCount(from sessions: [SessionState]) -> Int {
         sessions.filter(\.isExecutionActive).count
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // MARK: 宠物悬停弹出判定（T12-B · 与 docked 共用打开方式设置）
+    //
+    // 仅「鼠标移入」档在气泡隐藏且非拖拽时悬停弹出活动会话预览；
+    // 「点击」档保持隐藏（悬停仅视觉反馈），点击/通知弹出不受影响。
+    // ══════════════════════════════════════════════════════════════
+    static func shouldPresentPetHoverPreview(
+        notchOpenTrigger: NotchOpenTrigger,
+        bubbleState: DetachedIslandBubbleState,
+        isPetDragging: Bool
+    ) -> Bool {
+        guard notchOpenTrigger == .hover else { return false }
+        guard bubbleState == .hidden else { return false }
+        return !isPetDragging
     }
 
     static func canPresentBubble(
@@ -623,6 +643,7 @@ struct DetachedIslandPanelView: View {
 
     let onClose: () -> Void
     let onPetTap: () -> Void
+    let onPetHoverChanged: (Bool) -> Void
     let onPetDragStarted: () -> Void
     let onPetDragChanged: (CGSize) -> Void
     let onPetDragEnded: () -> Void
@@ -745,6 +766,7 @@ struct DetachedIslandPanelView: View {
             }
 
             petButton
+                .onHover(perform: onPetHoverChanged)
                 .frame(width: layout.petFrame.width, height: layout.petFrame.height)
                 .offset(x: layout.petFrame.minX, y: layout.petFrame.minY)
         }

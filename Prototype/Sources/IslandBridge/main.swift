@@ -2013,6 +2013,10 @@ struct RemoteHookEventPayload: Codable {
     let message: String?
     let expectsResponse: Bool
     let approvalsReviewer: String?
+    // 远程会话标题（Task 11）：从远程转写尾部读出的最新
+    // custom-title/summary；读取失败/无记录为 nil。App 侧可选
+    // 解码，旧 App 与旧 bridge 双向兼容。
+    let conversationTitle: String?
     let clientInfo: RemoteHookClientInfoPayload
 }
 
@@ -2162,6 +2166,9 @@ enum RemoteBridgeMessageBuilder {
         let remoteHost = firstNonEmpty(metadata["remote_host"], terminalContext.remoteHost)
         let transport = firstNonEmpty(metadata["connection_transport"], terminalContext.transport)
         let toolUseID = metadata["tool_use_id"]
+        // 转写路径（Task 11）：与 clientInfo.sessionFilePath 同源同值，
+        // 求值一次复用——标题读取与路径回退链保持完全一致
+        let sessionFilePath = firstNonEmpty(metadata["session_file_path"], metadata["rollout_path"], metadata["transcript_path"])
 
         return RemoteHookEventPayload(
             requestID: envelope.id,
@@ -2180,6 +2187,9 @@ enum RemoteBridgeMessageBuilder {
             message: metadata["message"] ?? envelope.preview,
             expectsResponse: envelope.expectsResponse,
             approvalsReviewer: metadata["approvals_reviewer"],
+            // 远程会话标题透传（Task 11）：尾部读取远程转写（≤128KB
+            // seek），失败静默 nil，绝不阻塞事件发送（<5ms 预算）
+            conversationTitle: TranscriptTitleReader.latestTitle(transcriptPath: sessionFilePath),
             clientInfo: RemoteHookClientInfoPayload(
                 kind: clientKind(for: envelope),
                 profileID: metadata["client_kind"],
@@ -2191,7 +2201,7 @@ enum RemoteBridgeMessageBuilder {
                 threadSource: firstNonEmpty(metadata["thread_source"], metadata["session_start_source"], metadata["codex_session_start_source"]),
                 transport: transport,
                 remoteHost: remoteHost,
-                sessionFilePath: firstNonEmpty(metadata["session_file_path"], metadata["rollout_path"], metadata["transcript_path"]),
+                sessionFilePath: sessionFilePath,
                 terminalBundleIdentifier: resolvedTerminalHostBundleIdentifier(
                     terminalBundleID: terminalContext.terminalBundleID,
                     ideBundleID: terminalContext.ideBundleID
@@ -2228,6 +2238,9 @@ enum RemoteBridgeMessageBuilder {
             message: message,
             expectsResponse: false,
             approvalsReviewer: nil,
+            // codex thread 快照来自远端 SQLite 而非 jsonl 转写，
+            // 无尾部标题可读，恒 nil（真实 hook 事件才是标题来源）
+            conversationTitle: nil,
             clientInfo: RemoteHookClientInfoPayload(
                 kind: "codexCLI",
                 profileID: "codex-cli",

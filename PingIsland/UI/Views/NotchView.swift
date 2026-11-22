@@ -435,6 +435,15 @@ struct NotchView: View {
 
     private var settingsAwareBody: some View {
         lifecycleBody
+            // ── 通知呈示状态上报 VM（高度公式兜底输入） ────────────
+            // 通知卡呈示期间面板内容需求至少为卡体最低高度；
+            // 消失后回落纯列表公式。
+            .onChange(of: activeCompletionNotification) { _, notification in
+                viewModel.updateNotificationPresentationActive(notification != nil)
+            }
+            .onAppear {
+                viewModel.updateNotificationPresentationActive(activeCompletionNotification != nil)
+            }
             .onChange(of: settings.autoOpenCompletionPanel) { _, isEnabled in
                 if !isEnabled {
                     removeCompletionNotifications(
@@ -842,7 +851,14 @@ struct NotchView: View {
                 MascotView(
                     kind: completionNotificationMascotKind,
                     status: .idle,
-                    size: petIconSize
+                    // ── 通知头像随紧凑档收紧（16 → 14） ─────────────
+                    // 与会话列表头像密度表同源，保持面板视觉一致。
+                    size: settings.compactSessionList
+                        ? SessionListCompactMetrics.avatarMascotSize(
+                            compactList: true,
+                            singleLine: false
+                        )
+                        : petIconSize
                 )
                 .padding(.leading, 14)
             }

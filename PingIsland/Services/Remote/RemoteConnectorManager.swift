@@ -889,7 +889,10 @@ final class RemoteConnectorManager: ObservableObject {
                 bridgeExpectsResponse: payload.expectsResponse,
                 codexBypassPermissions: Self.isRemoteCodexBypassPermissionRequest(
                     provider: payload.provider, eventType: payload.event, permissionMode: payload.permissionMode
-                )
+                ),
+                // 远程会话标题（Task 11）：wire 顶层字段透传至事件，
+                // 由 SessionStore 注入 conversationInfo.summary
+                conversationTitle: payload.conversationTitle
             )
 
             if event.shouldFilterBeforeApprovalHandling {
@@ -1678,6 +1681,74 @@ final class RemoteConnectorManager: ObservableObject {
             return nil
         }
         return sanitizedNonEmpty(sshTarget.split(separator: "@").last.map(String.init) ?? sshTarget)
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // MARK: - 会话行远程主机徽标（remoteHost → endpoint 展示名）
+    // ═══════════════════════════════════════════════════════════════
+
+    /// 将会话携带的 remoteHost 提示映射为会话行主机徽标文案：
+    /// 在已配置 endpoints 中按 host 大小写不敏感匹配（显式端口须
+    /// 一致），命中返回 endpoint 展示名（resolvedTitle），未命中回
+    /// 退 host 部分（去端口），空输入返回 nil。
+    nonisolated static func resolvedRemoteHostBadgeTitle(
+        remoteHost: String?,
+        endpoints: [RemoteEndpoint]
+    ) -> String? {
+        guard let sanitizedHost = sanitizedNonEmpty(remoteHost) else {
+            return nil
+        }
+
+        let candidate = parseRemoteHostCandidate(sanitizedHost)
+        let candidateHost = candidate.host.lowercased()
+
+        for endpoint in endpoints {
+            guard let endpointLink = endpoint.sshLink else { continue }
+            guard endpointLink.host.lowercased() == candidateHost else { continue }
+            // 显式端口参与匹配；未带端口的提示匹配任意同 host endpoint
+            if let explicitPort = candidate.port, explicitPort != endpointLink.port {
+                continue
+            }
+            return endpoint.resolvedTitle
+        }
+
+        return sanitizedNonEmpty(candidate.host)
+    }
+
+    /// 解析 remoteHost 提示的 host / 显式端口。
+    /// 兼容裸 host、host:port、user@host、ssh://host:port 四种历史
+    /// 形态；默认端口 22 归一化为「无显式端口」。
+    nonisolated private static func parseRemoteHostCandidate(
+        _ value: String
+    ) -> (host: String, port: Int?) {
+        var target = value
+
+        // 剥离 ssh:// scheme 与 path 成分（URL 形态偶见于转发链路）
+        if target.lowercased().hasPrefix("ssh://") {
+            target = String(target.dropFirst("ssh://".count))
+        }
+        if let slashIndex = target.firstIndex(of: "/") {
+            target = String(target[..<slashIndex])
+        }
+
+        // 显式端口须在 RemoteSSHLink 解析前自行识别——其 port 属性
+        // 无法区分「显式 22」与「缺省 22」，直接折叠会把 box:22 误
+        // 匹配到非 22 端口的 endpoint 上。
+        var explicitPort: Int? = nil
+        let portSearchStart = target.contains("[")
+            ? target.lastIndex(of: "]").map { target.index(after: $0) } ?? target.startIndex
+            : target.startIndex
+        if let colonIndex = target.lastIndex(of: ":"), colonIndex >= portSearchStart {
+            let portSuffix = target[target.index(after: colonIndex)...]
+            if !portSuffix.isEmpty, portSuffix.allSatisfy(\.isNumber) {
+                explicitPort = Int(portSuffix)
+            }
+        }
+
+        guard let link = RemoteSSHLink(sshTarget: target) else {
+            return (target, explicitPort)
+        }
+        return (link.host, explicitPort)
     }
 
     nonisolated static func isRemoteCodexBypassPermissionRequest(

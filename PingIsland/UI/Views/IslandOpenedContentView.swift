@@ -50,14 +50,20 @@ struct IslandOpenedContentView: View {
             SessionHoverDashboardView(
                 sessions: hoverPreviewSessions,
                 sessionMonitor: sessionMonitor,
-                density: surface == .floating ? .detachedCompact : .regular,
+                density: HoverPreviewDensity.resolved(
+                    surface: surface,
+                    compactList: settings.compactSessionList
+                ),
                 onQuestionInteractionStateChanged: { viewModel.setInlineTextInputActive($0) }
             )
         case .attentionNotification(let session):
             SessionAttentionNotificationView(
                 session: liveSession(for: session),
                 sessionMonitor: sessionMonitor,
-                density: surface == .floating ? .detachedCompact : .regular,
+                density: HoverPreviewDensity.resolved(
+                    surface: surface,
+                    compactList: settings.compactSessionList
+                ),
                 suppressInAppPromptControls: settings.effectiveRoutePromptsToTerminal,
                 onQuestionInteractionStateChanged: { viewModel.setInlineTextInputActive($0) },
                 onActionCompleted: onAttentionActionCompleted

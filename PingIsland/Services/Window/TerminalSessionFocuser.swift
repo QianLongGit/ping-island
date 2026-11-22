@@ -325,6 +325,14 @@ actor TerminalSessionFocuser {
     // 匹配）激活窗口并解析 pane。
     // ============================================================
     func focusKeroSession(sessionId: String?) async -> Bool {
+        // ============================================================
+        // 测试 hook：拦截真实 NSWorkspace.open，让单测能安全断言
+        // SessionLauncher 各分支到 kero 跳转链的路由行为。
+        // ============================================================
+        if let handler = Self.focusKeroSessionHandlerForTesting {
+            return await handler(sessionId)
+        }
+
         guard let jumpURL = Self.keroJumpURL(
             sessionId: sessionId,
             tty: nil,
@@ -928,6 +936,9 @@ actor TerminalSessionFocuser {
     static func keroIsHandledBundleIdentifier(_ bundleIdentifier: String?) -> Bool {
         bundleIdentifier == "sh.kero" || bundleIdentifier == "sh.kero.dev"
     }
+
+    /// 测试专用 hook：非 nil 时 focusKeroSession 不再真实 open URL
+    static var focusKeroSessionHandlerForTesting: (@Sendable (String?) async -> Bool)?
 
     /// 构造 kero://focus 跳转 URL：
     /// - 空参数（nil / 空白）省略对应 query 项，三参全空返回 nil

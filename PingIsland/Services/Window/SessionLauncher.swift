@@ -76,10 +76,34 @@ actor SessionLauncher {
             return focused
         }
 
-        if session.isRemoteSession,
-           await activateRemoteCarrierTerminal(session) {
-            Self.logger.debug("Activated remote carrier terminal for session \(session.sessionId, privacy: .public)")
-            return true
+        if session.isRemoteSession {
+            if await activateRemoteCarrierTerminal(session) {
+                Self.logger.debug("Activated remote carrier terminal for session \(session.sessionId, privacy: .public)")
+                return true
+            }
+
+            // ============================================================
+            // kero 兜底（stale-identity 最后手段）：kero 识别上线前
+            // 捕获的会话 terminalBundleIdentifier 停留在 ghostty 等
+            // 旧值，上方 kero 早返回分支不命中；而 kero 的远程传输
+            // 在 daemon 内部完成，本机并无 ssh 载体进程，载体猎取
+            // 对这类会话必然落空。此处改走 focusKeroSession——kero
+            // 侧按远程 session 级联激活（restore 绑定仍在即可跳），
+            // Mac 本机无 kero 时 open 失败无害，兜底失败则继续落入
+            // 下方既有瀑布，非 kero 远程会话行为不变。
+            // ============================================================
+            let focusedViaKeroFallback = await TerminalSessionFocuser.shared.focusKeroSession(
+                sessionId: session.sessionId
+            )
+            if focusedViaKeroFallback {
+                Self.logger.debug(
+                    "Activated remote kero session \(session.sessionId, privacy: .public) via stale-identity carrier fallback"
+                )
+                await FocusDiagnosticsStore.shared.record(
+                    "SessionLauncher remote-kero fallback stale-identity session=\(session.sessionId) bundle=\(session.clientInfo.terminalBundleIdentifier ?? "nil") success=true"
+                )
+                return true
+            }
         }
 
         if shouldPrioritizeIDEChatSession(for: session),

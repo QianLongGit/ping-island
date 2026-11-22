@@ -15,6 +15,8 @@ struct SessionListView: View {
     @ObservedObject var viewModel: NotchViewModel
     var enableKeyboardNavigation = true
     var highlightedSessionStableID: String? = nil
+    // 紧凑会话列表开关（默认开）：emptyState 按钮区密度跟随
+    @ObservedObject private var settings = AppSettings.shared
     @State private var expandedSessionStableID: String?
     @State private var selectedSessionStableID: String?
     @State private var keyEventMonitor: Any?
@@ -30,6 +32,13 @@ struct SessionListView: View {
         }
         .task {
             isYabaiAvailable = await WindowFinder.shared.isYabaiAvailable()
+        }
+        // ── 行数上报：驱动面板解析式高度（内容自适应封顶） ────────
+        .onAppear {
+            viewModel.updateInstanceRowCount(displayedInstances.count)
+        }
+        .onChange(of: displayedInstances.count) { _, newCount in
+            viewModel.updateInstanceRowCount(newCount)
         }
     }
 
@@ -53,7 +62,7 @@ struct SessionListView: View {
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundColor(.white.opacity(0.86))
                                 .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
+                                .padding(.vertical, settings.compactSessionList ? 5 : 7)
                                 .background(nativeRuntimeTint(for: .claude).opacity(0.26))
                                 .clipShape(Capsule())
                         }
@@ -66,14 +75,14 @@ struct SessionListView: View {
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundColor(.white.opacity(0.86))
                                 .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
+                                .padding(.vertical, settings.compactSessionList ? 5 : 7)
                                 .background(nativeRuntimeTint(for: .codex).opacity(0.26))
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.top, 8)
+                .padding(.top, settings.compactSessionList ? 4 : 8)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -678,6 +687,8 @@ struct InstanceRow: View {
     @State private var isHovered = false
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var energyGovernor = EnergyGovernor.shared
+    // 远程 endpoints 变化（增删主机）时刷新会话行主机徽标
+    @ObservedObject private var remoteManager = RemoteConnectorManager.shared
 
     private let spinnerSymbols = ["·", "✢", "✳", "∗", "✻", "✽"]
 
@@ -719,8 +730,12 @@ struct InstanceRow: View {
         CGFloat(settings.contentFontSize)
     }
 
+    private var isCompactList: Bool {
+        settings.compactSessionList
+    }
+
     private var detailFontSize: CGFloat {
-        max(11, titleFontSize - 2)
+        SessionListCompactMetrics.detailFontSize(base: titleFontSize, compactList: isCompactList)
     }
 
     private var detailsEnabled: Bool {
@@ -752,14 +767,14 @@ struct InstanceRow: View {
     }
 
     private var projectTitleFontSize: CGFloat {
-        max(11, titleFontSize - 1)
+        SessionListCompactMetrics.projectTitleFontSize(base: titleFontSize, compactList: isCompactList)
     }
 
     private var sessionTitleFontSize: CGFloat {
         if usesSingleLineCompactLayout {
             return max(11, titleFontSize - 1)
         }
-        return max(12, titleFontSize + 1)
+        return SessionListCompactMetrics.sessionTitleFontSize(base: titleFontSize, compactList: isCompactList)
     }
 
     var body: some View {
@@ -778,17 +793,18 @@ struct InstanceRow: View {
             } else if isCollapsedCompactPresentation {
                 compactMetaLine
             } else {
-                VStack(alignment: .trailing, spacing: 6) {
-                    HStack(spacing: 6) {
+                VStack(alignment: .trailing, spacing: SessionListCompactMetrics.trailingStackSpacing(compactList: isCompactList)) {
+                    HStack(spacing: SessionListCompactMetrics.badgeSpacing(compactList: isCompactList)) {
                         metaBadge(
                             timeLabel,
                             tint: Color.white.opacity(0.1),
                             foreground: .white.opacity(0.64),
-                            fontDesign: .monospaced
+                            fontDesign: .monospaced,
+                            compact: isCompactList
                         )
-                        metaBadge(providerLabel, tint: providerColor.opacity(0.2))
+                        metaBadge(providerLabel, tint: providerColor.opacity(0.2), compact: isCompactList)
                         if let primarySupplementaryBadge {
-                            supplementaryBadgeView(primarySupplementaryBadge)
+                            supplementaryBadgeView(primarySupplementaryBadge, compact: isCompactList)
                         }
                     }
 
@@ -799,7 +815,7 @@ struct InstanceRow: View {
         }
         .padding(.leading, 10)
         .padding(.trailing, 12)
-        .padding(.vertical, usesSingleLineCompactLayout ? 5 : 8)
+        .padding(.vertical, SessionListCompactMetrics.rowVerticalPadding(compactList: isCompactList, singleLine: usesSingleLineCompactLayout))
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: session.phase)
         .animation(.spring(response: 0.28, dampingFraction: 0.82), value: isExpanded)
         .saturation(isCollapsedCompactPresentation ? 0 : 1)
@@ -875,7 +891,7 @@ struct InstanceRow: View {
     }
 
     private var leadingTextContent: some View {
-        VStack(alignment: .leading, spacing: usesSingleLineCompactLayout ? 0 : 5) {
+        VStack(alignment: .leading, spacing: SessionListCompactMetrics.leadingTextSpacing(compactList: isCompactList, singleLine: usesSingleLineCompactLayout)) {
             if shouldReserveIncomingPreviewLineHeight {
                 reservedPreviewCenteringSpacer
             }
@@ -910,7 +926,8 @@ struct InstanceRow: View {
                 .foregroundColor(.white)
         }
 
-        return Text(session.projectName)
+        // ── 主分支：项目名 · 会话标题（· 远程主机名） ─────────────
+        var title = Text(session.projectName)
             .font(.system(size: projectTitleFontSize, weight: .semibold))
             .foregroundColor(.white.opacity(0.84))
         + Text(" · ")
@@ -919,26 +936,52 @@ struct InstanceRow: View {
         + Text(session.displayTitle)
             .font(.system(size: sessionTitleFontSize, weight: .bold))
             .foregroundColor(.white)
+
+        // 多远程主机场景标识会话归属；透明度 0.5，视觉层级低于
+        // 项目名（0.84）与会话标题（1.0）
+        if let remoteHostTitle {
+            title = title
+                + Text(" · ")
+                    .font(.system(size: projectTitleFontSize, weight: .bold))
+                    .foregroundColor(.white.opacity(0.34))
+                + Text(remoteHostTitle)
+                    .font(.system(size: projectTitleFontSize, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.5))
+        }
+
+        return title
+    }
+
+    /// 远程会话主机徽标：endpoint 命中取展示名，未命中回退 host 部分。
+    private var remoteHostTitle: String? {
+        guard session.isRemoteSession else { return nil }
+        return RemoteConnectorManager.resolvedRemoteHostBadgeTitle(
+            remoteHost: session.clientInfo.remoteHost,
+            endpoints: remoteManager.endpoints
+        )
     }
 
     @ViewBuilder
     private var avatarView: some View {
         ZStack(alignment: .bottomTrailing) {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: SessionListCompactMetrics.avatarCornerRadius(compactList: isCompactList), style: .continuous)
                 .fill(Color.white.opacity(0.04))
 
             MascotView(
                 kind: settings.mascotKind(for: session.mascotClient),
                 status: MascotStatus(session: session),
-                size: usesSingleLineCompactLayout ? 16 : 18,
+                size: SessionListCompactMetrics.avatarMascotSize(compactList: isCompactList, singleLine: usesSingleLineCompactLayout),
                 animationTime: 0
             )
-            .padding(6)
+            .padding(SessionListCompactMetrics.avatarInset(compactList: isCompactList))
 
             avatarStatusBadge
                 .offset(x: 2, y: 2)
         }
-        .frame(width: usesSingleLineCompactLayout ? 30 : 34, height: usesSingleLineCompactLayout ? 30 : 34)
+        .frame(
+            width: SessionListCompactMetrics.avatarEdge(compactList: isCompactList, singleLine: usesSingleLineCompactLayout),
+            height: SessionListCompactMetrics.avatarEdge(compactList: isCompactList, singleLine: usesSingleLineCompactLayout)
+        )
     }
 
     @ViewBuilder
@@ -1288,7 +1331,7 @@ struct InstanceRow: View {
             )
         }
 
-        return Array(lines.prefix(detailsEnabled ? 2 : 1))
+        return Array(lines.prefix(SessionListCompactMetrics.previewLineLimit(detailsEnabled: detailsEnabled, compactList: isCompactList)))
     }
 
     private var assistantPrefixLabel: String {
@@ -1389,13 +1432,14 @@ struct InstanceRow: View {
 
     @ViewBuilder
     private var trailingActions: some View {
+        let actionButtonEdge = SessionListCompactMetrics.actionButtonEdge(compactList: isCompactList)
         if session.shouldSuppressInAppPromptControls(
             routePromptsToTerminal: settings.effectiveRoutePromptsToTerminal
         ) {
             EmptyView()
         } else if session.needsQuestionResponse {
-            HStack(spacing: 6) {
-                IconButton(icon: "bubble.left") {
+            HStack(spacing: SessionListCompactMetrics.badgeSpacing(compactList: isCompactList)) {
+                IconButton(icon: "bubble.left", size: actionButtonEdge) {
                     onChat()
                 }
 
@@ -1415,7 +1459,7 @@ struct InstanceRow: View {
                 }
 
                 if session.isInTmux && isYabaiAvailable {
-                    IconButton(icon: "terminal") {
+                    IconButton(icon: "terminal", size: actionButtonEdge) {
                         onFocus()
                     }
                 }
@@ -1429,25 +1473,25 @@ struct InstanceRow: View {
                 onReject: onReject
             )
         } else {
-            HStack(spacing: 6) {
-                IconButton(icon: "bubble.left") {
+            HStack(spacing: SessionListCompactMetrics.badgeSpacing(compactList: isCompactList)) {
+                IconButton(icon: "bubble.left", size: actionButtonEdge) {
                     onChat()
                 }
 
                 if session.isInTmux && isYabaiAvailable {
-                    IconButton(icon: "eye") {
+                    IconButton(icon: "eye", size: actionButtonEdge) {
                         onFocus()
                     }
                 }
 
                 if session.shouldShowTerminateActionInPrimaryUI {
-                    IconButton(icon: "stop.circle") {
+                    IconButton(icon: "stop.circle", size: actionButtonEdge) {
                         onTerminate()
                     }
                 }
 
                 if session.shouldShowArchiveActionInPrimaryUI {
-                    IconButton(icon: "archivebox") {
+                    IconButton(icon: "archivebox", size: actionButtonEdge) {
                         onArchive()
                     }
                 }
@@ -1579,6 +1623,118 @@ enum SessionListRowClickBehavior {
     }
 }
 
+// ═════════════════════════════════════════════════════════════════
+// MARK: - 会话行紧凑度量（SessionListCompactMetrics）
+//
+// 紧凑模式（settings.compactSessionList，默认开）的密度参数集中
+// 表：行垂直 padding、文本间距、字号、头像、徽章间距、尾随按钮
+// 边长与行高估算全部由此纯函数驱动，InstanceRow 只做取值渲染。
+// compactList = false 时所有函数返回旧版宽松值（零回归红线）；
+// singleLine 指会话自身的 single-line 紧凑呈现（折叠态 / Codex
+// subagent），与列表级紧凑开关正交叠加。
+// ═════════════════════════════════════════════════════════════════
+enum SessionListCompactMetrics {
+    // ── 字号（base = contentFontSize，默认 13） ───────────────────
+    // 紧凑：标题 12 / 项目名·正文 10.5；宽松：14 / 12 / 11
+    static func sessionTitleFontSize(base: CGFloat, compactList: Bool) -> CGFloat {
+        compactList ? max(11, base - 1) : max(12, base + 1)
+    }
+
+    static func projectTitleFontSize(base: CGFloat, compactList: Bool) -> CGFloat {
+        compactList ? max(10.5, base - 2.5) : max(11, base - 1)
+    }
+
+    static func detailFontSize(base: CGFloat, compactList: Bool) -> CGFloat {
+        compactList ? max(9.5, base - 2.5) : max(11, base - 2)
+    }
+
+    // ── 行距 ──────────────────────────────────────────────────────
+    // 行垂直 padding 宽松 8/5（regular/single-line），紧凑减半取整
+    static func rowVerticalPadding(compactList: Bool, singleLine: Bool) -> CGFloat {
+        switch (compactList, singleLine) {
+        case (false, false): return 8
+        case (false, true): return 5
+        case (true, false): return 4
+        case (true, true): return 3
+        }
+    }
+
+    // 标题与预览行间距：single-line 恒 0（原状），regular 5→2
+    static func leadingTextSpacing(compactList: Bool, singleLine: Bool) -> CGFloat {
+        guard !singleLine else { return 0 }
+        return compactList ? 2 : 5
+    }
+
+    // ── 预览行数：紧凑下强制单行（每行自身 lineLimit(1) 截断） ──
+    static func previewLineLimit(detailsEnabled: Bool, compactList: Bool) -> Int {
+        guard detailsEnabled, !compactList else { return 1 }
+        return 2
+    }
+
+    // ── 头像：mascot 18→14（single-line 16→13），边框 34→26 ────
+    static func avatarMascotSize(compactList: Bool, singleLine: Bool) -> CGFloat {
+        switch (compactList, singleLine) {
+        case (false, false): return 18
+        case (false, true): return 16
+        case (true, false): return 14
+        case (true, true): return 13
+        }
+    }
+
+    static func avatarEdge(compactList: Bool, singleLine: Bool) -> CGFloat {
+        switch (compactList, singleLine) {
+        case (false, false): return 34
+        case (false, true): return 30
+        case (true, false): return 26
+        case (true, true): return 24
+        }
+    }
+
+    static func avatarCornerRadius(compactList: Bool) -> CGFloat {
+        compactList ? 8 : 10
+    }
+
+    static func avatarInset(compactList: Bool) -> CGFloat {
+        compactList ? 5 : 6
+    }
+
+    // ── 徽章与尾随操作 ────────────────────────────────────────────
+    // 徽章行水平间距 6→4；徽章行与操作按钮的垂直间距 6→3
+    static func badgeSpacing(compactList: Bool) -> CGFloat {
+        compactList ? 4 : 6
+    }
+
+    static func trailingStackSpacing(compactList: Bool) -> CGFloat {
+        compactList ? 3 : 6
+    }
+
+    // 尾随图标按钮边长 22→18（IconButton size 参数）
+    static func actionButtonEdge(compactList: Bool) -> CGFloat {
+        compactList ? 18 : 22
+    }
+
+    // ── 行高估算（设计契约：紧凑 ≤ 40pt） ────────────────────────
+    // 模型 = 行 padding×2 + 标题行 + (间距 + 预览行×limit)；
+    // 文本行高按字号 1.25 倍近似，宽松版含预览行距 3。
+    static func estimatedRowHeight(base: CGFloat, compactList: Bool) -> CGFloat {
+        let title = sessionTitleFontSize(base: base, compactList: compactList)
+        let detail = detailFontSize(base: base, compactList: compactList)
+        let padding = rowVerticalPadding(compactList: compactList, singleLine: false)
+        let lineFactor: CGFloat = 1.25
+        if compactList {
+            return padding * 2
+                + title * lineFactor
+                + leadingTextSpacing(compactList: true, singleLine: false)
+                + detail * lineFactor
+        }
+        return padding * 2
+            + title * lineFactor
+            + leadingTextSpacing(compactList: false, singleLine: false)
+            + 2 * detail * lineFactor
+            + 3
+    }
+}
+
 private struct QueuePreviewLine: Identifiable {
     let id: String
     let prefix: String?
@@ -1661,6 +1817,8 @@ struct InlineApprovalButtons: View {
 
 struct IconButton: View {
     let icon: String
+    // 紧凑会话列表下由调用方传 18（SessionListCompactMetrics 表驱动）
+    var size: CGFloat = 22
     let action: () -> Void
 
     @State private var isHovered = false
@@ -1672,7 +1830,7 @@ struct IconButton: View {
             Image(systemName: icon)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(isHovered ? .white.opacity(0.8) : .white.opacity(0.4))
-                .frame(width: 22, height: 22)
+                .frame(width: size, height: size)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(isHovered ? Color.white.opacity(0.1) : Color.clear)
