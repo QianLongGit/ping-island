@@ -646,10 +646,8 @@ class NotchViewModel: ObservableObject {
             } else if geometry.isPointOutsidePanel(location, size: openedSize) {
                 // The panel window already handles click-through replay for intercepted clicks.
                 notchClose()
-            } else if openReason == .hover {
-                // ── 智能升级（T13）：预览态单击面板内部 → 完整面板 ──
-                handleOpenedPanelInteriorClick()
             }
+            // ── T14：面板内部点击＝纯面板动作（会话行跳转等），VM 零状态改变 ──
         case .closed, .popping:
             if detachmentTriggerScreenRect.contains(location) {
                 beginDockedDetachmentTracking(source: .closed, startLocation: location)
@@ -717,7 +715,8 @@ class NotchViewModel: ObservableObject {
                   !tracking.hasExceededTapMovementTolerance,
                   detachmentTriggerScreenRect.contains(location),
                   !isInChatMode {
-            notchClose()
+            // ── 岛区域单击 toggle（T14）：预览态 → 完整面板；完整态 → 收起 ──
+            handleIslandAreaTap()
         }
 
         cancelDockedDetachmentTracking()
@@ -889,11 +888,17 @@ class NotchViewModel: ObservableObject {
         notchOpen(reason: previewSessions.isEmpty ? .click : .hover)
     }
 
-    /// opened 面板内部单击：预览态升级为完整面板（任意状态单击即完整面板）。
-    /// 完整面板/聊天视图下幂等（不打断聊天输入等既有交互）。
-    func handleOpenedPanelInteriorClick() {
-        guard openReason == .hover else { return }
-        notchOpen(reason: .click)
+    /// 岛区域（notch pill，打开后仍占据 closedScreenRect 的顶部条）单击 toggle（T14）：
+    /// 预览态 → 单下直达完整面板；完整/通知态 → 收起。
+    /// 仅由岛 pill 的 tap 判定（handleMouseUp 的 detach 跟踪短按分支）调用；
+    /// 面板内部点击不走此路径——那是纯面板动作（会话行跳转等），
+    /// 由 SwiftUI 视图自持手势承接，VM 不得借 mouseDown 抢跑改状态。
+    func handleIslandAreaTap() {
+        if openReason == .hover {
+            notchOpen(reason: .click)
+        } else {
+            notchClose()
+        }
     }
 
     func notchClose() {

@@ -10,8 +10,9 @@ import XCTest
 //      轻量预览（dashboard）；
 //   2. 预览无内容 → dwell 到点直接展开完整面板（sessionList），
 //      跳过「无活动会话」空态卡的中转。
-//   3. 预览态下单击面板内部 → 升级为完整面板（任意状态单击即
-//      完整面板）。
+//   3. 岛区域（notch pill，鼠标移入后不可见）单击 toggle（T14）：
+//      预览态 → 单下直达完整面板；完整态 → 收起。面板内部点击
+//      为纯面板动作（会话行跳转等），零面板状态改变。
 // ═════════════════════════════════════════════════════════════════
 @MainActor
 final class NotchViewModelHoverTriggerTests: XCTestCase {
@@ -85,31 +86,43 @@ final class NotchViewModelHoverTriggerTests: XCTestCase {
         }
     }
 
-    // ── 智能层：预览态单击升级完整面板 ─────────────────────────────
+    // ── 智能层：岛区域单击 toggle（T14 · 面板内点击=纯面板动作）──
 
-    func testOpenedHoverPreviewInteriorClickUpgradesToFullPanel() async {
+    func testIslandAreaTapUpgradesHoverPreviewToFullPanel() async {
         await MainActor.run {
             let viewModel = makeViewModel(previewSessions: [makeSession(id: "active-4")])
             viewModel.notchOpen(reason: .hover)
             XCTAssertEqual(viewModel.openReason, .hover)
 
-            viewModel.handleOpenedPanelInteriorClick()
+            viewModel.handleIslandAreaTap()
 
+            // 岛区域单击：预览态单下直达完整面板
             XCTAssertEqual(viewModel.status, .opened)
             XCTAssertEqual(viewModel.openReason, .click)
         }
     }
 
-    func testOpenedFullPanelInteriorClickIsIdempotent() async {
+    func testIslandAreaTapCollapsesFullPanel() async {
         await MainActor.run {
             let viewModel = makeViewModel(previewSessions: [makeSession(id: "active-5")])
             viewModel.presentSessionList(reason: .click)
 
-            viewModel.handleOpenedPanelInteriorClick()
+            viewModel.handleIslandAreaTap()
 
-            // 完整面板下再点面板内部：保持原样（无聊天会话恢复、不重置）
-            XCTAssertEqual(viewModel.status, .opened)
-            XCTAssertEqual(viewModel.openReason, .click)
+            // 岛区域单击：完整态 → 收起（toggle 语义）
+            XCTAssertEqual(viewModel.status, .closed)
+        }
+    }
+
+    func testIslandAreaTapClosesNotificationPresentation() async {
+        await MainActor.run {
+            let viewModel = makeViewModel(previewSessions: [makeSession(id: "active-6")])
+            viewModel.notchOpen(reason: .notification)
+
+            viewModel.handleIslandAreaTap()
+
+            // 通知态岛区域单击：维持既有收起行为（通知路径不动）
+            XCTAssertEqual(viewModel.status, .closed)
         }
     }
 
