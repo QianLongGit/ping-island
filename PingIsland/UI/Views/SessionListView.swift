@@ -17,6 +17,8 @@ struct SessionListView: View {
     var highlightedSessionStableID: String? = nil
     // 紧凑会话列表开关（默认开）：emptyState 按钮区密度跟随
     @ObservedObject private var settings = AppSettings.shared
+    // T25：kero 会话清单（补全 hook 侧看不到的本地 / 各主机会话）
+    @ObservedObject private var keroInventory = KeroInventoryService.shared
     @State private var expandedSessionStableID: String?
     @State private var selectedSessionStableID: String?
     @State private var keyEventMonitor: Any?
@@ -24,7 +26,8 @@ struct SessionListView: View {
 
     var body: some View {
         Group {
-            if sessionMonitor.instances.isEmpty {
+            // T25：hook 侧没会话但 kero 侧有会话时，仍要展示完整列表
+            if sessionMonitor.instances.isEmpty && keroRows.isEmpty {
                 emptyState
             } else {
                 instancesList
@@ -33,11 +36,15 @@ struct SessionListView: View {
         .task {
             isYabaiAvailable = await WindowFinder.shared.isYabaiAvailable()
         }
+        // ── T25：面板打开时拉一次 kero 清单（TTL 内复用缓存） ─────
+        .task {
+            keroInventory.refreshIfNeeded()
+        }
         // ── 行数上报：驱动面板解析式高度（内容自适应封顶） ────────
         .onAppear {
-            viewModel.updateInstanceRowCount(displayedInstances.count)
+            viewModel.updateInstanceRowCount(displayedRowCount)
         }
-        .onChange(of: displayedInstances.count) { _, newCount in
+        .onChange(of: displayedRowCount) { _, newCount in
             viewModel.updateInstanceRowCount(newCount)
         }
     }
@@ -114,53 +121,95 @@ struct SessionListView: View {
         displayedInstances.map(\.stableId)
     }
 
+    // ═════════════════════════════════════════════════════════════
+    // MARK: - T25：kero 会话补全
+    // ═════════════════════════════════════════════════════════════
+
+    /// kero 独占行：kero 侧才知道的会话（与 hook 侧去重后的净增行）
+    ///
+    /// 去重规则（修复轮 1 定案）：
+    ///   ① agentSession.id 命中 hook 会话 → 只补数据，不出行
+    ///   ② 其余 → kero 独占行（(dir,pid) 近似匹配已删：hook 侧是
+    ///      agent 进程树 PID、kero 侧是 shell PID，真实数据永不相等）
+    private var keroRows: [KeroSessionMerger.Row] {
+        let hookRefs = displayedInstances.map {
+            KeroSessionMerger.HookSessionRef(
+                sessionId: $0.sessionId,
+                cwd: $0.cwd,
+                pid: $0.pid
+            )
+        }
+
+        return KeroSessionMerger.merge(
+            inventory: keroInventory.inventory,
+            hookSessions: hookRefs
+        ).exclusiveRows
+    }
+
+    /// 列表条目：hook 分组与 kero 独占行按 activity 混排
+    ///（hook 分组保持既有相对顺序，kero 行不另开分区）
+    private var composedEntries: [ComposedListEntry] {
+        let groups = sessionGroups
+        let rows = keroRows
+        let groupById = Dictionary(
+            groups.map { ($0.session.stableId, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        let entries = KeroSessionListComposer.compose(
+            hookGroups: groups.map {
+                KeroSessionListComposer.HookGroup(
+                    id: $0.session.stableId,
+                    activity: $0.session.lastActivity
+                )
+            },
+            keroRows: rows
+        )
+
+        return entries.compactMap { entry in
+            switch entry {
+            case .hook(let id):
+                guard let group = groupById[id] else { return nil }
+                return .hook(group)
+            case .kero(let row):
+                return .kero(row)
+            }
+        }
+    }
+
+    /// 行数（含 kero 独占行）：驱动面板高度估算
+    private var displayedRowCount: Int {
+        displayedInstances.count + keroRows.count
+    }
+
+    /// 列表条目：既有 hook 分组 或 kero 独占行
+    private enum ComposedListEntry: Identifiable {
+        case hook(PrimarySessionGroup)
+        case kero(KeroSessionMerger.Row)
+
+        var id: String {
+            switch self {
+            case .hook(let group):
+                return "hook:\(group.session.stableId)"
+            case .kero(let row):
+                return row.id
+            }
+        }
+    }
+
     private var shouldUseScrollContainer: Bool {
-        displayedInstances.count > 3 || expandedSessionStableID != nil
+        // 判定口径与面板高度估算一致：hook 行 + kero 独占行的总行数
+        displayedRowCount > 3 || expandedSessionStableID != nil
     }
 
     private var listContent: some View {
         LazyVStack(spacing: 2) {
-            ForEach(sessionGroups) { group in
-                VStack(spacing: 0) {
-                    InstanceRow(
-                        session: group.session,
-                        isExpanded: expandedSessionStableID == group.session.stableId,
-                        isSelected: selectedSessionStableID == group.session.stableId,
-                        isHighlighted: highlightedSessionStableID == group.session.stableId,
-                        isYabaiAvailable: isYabaiAvailable,
-                        onSelect: { selectSession(group.session) },
-                        onActivate: { activateSession(group.session) },
-                        onToggleExpanded: { toggleExpanded(group.session) },
-                        onFocus: { activateSession(group.session) },
-                        onChat: { openChat(group.session) },
-                        onOpenClient: { openClient(group.session) },
-                        onArchive: { archiveSession(group.session) },
-                        onTerminate: { terminateSession(group.session) },
-                        onApprove: { approveSession(group.session) },
-                        onApproveForSession: { approveSessionForScope(group.session) },
-                        onReject: { rejectSession(group.session) }
-                    )
-                    .id(group.session.stableId)
-
-                    if !group.childSessions.isEmpty {
-                        VStack(spacing: 4) {
-                            ForEach(group.childSessions) { childSession in
-                                SubagentAttachmentRow(
-                                    session: childSession,
-                                    isSelected: selectedSessionStableID == childSession.stableId,
-                                    isHighlighted: highlightedSessionStableID == childSession.stableId,
-                                    onSelect: { selectSession(childSession) },
-                                    onActivate: { activateSession(childSession) },
-                                    onChat: { openChat(childSession) }
-                                )
-                                .id(childSession.stableId)
-                            }
-                        }
-                        .padding(.leading, 46)
-                        .padding(.trailing, 0)
-                        .padding(.top, 3)
-                        .padding(.bottom, 5)
-                    }
+            ForEach(composedEntries) { entry in
+                switch entry {
+                case .hook(let group):
+                    hookGroupView(group)
+                case .kero(let row):
+                    keroRowView(row)
                 }
             }
         }
@@ -173,6 +222,61 @@ struct SessionListView: View {
                 )
             }
         )
+    }
+
+    /// 既有 hook 分组：渲染路径与改造前逐字一致，仅抽出为子视图以便与
+    /// kero 行混排（不触碰 InstanceRow / SubagentAttachmentRow 任何参数）
+    private func hookGroupView(_ group: PrimarySessionGroup) -> some View {
+        VStack(spacing: 0) {
+            InstanceRow(
+                session: group.session,
+                isExpanded: expandedSessionStableID == group.session.stableId,
+                isSelected: selectedSessionStableID == group.session.stableId,
+                isHighlighted: highlightedSessionStableID == group.session.stableId,
+                isYabaiAvailable: isYabaiAvailable,
+                onSelect: { selectSession(group.session) },
+                onActivate: { activateSession(group.session) },
+                onToggleExpanded: { toggleExpanded(group.session) },
+                onFocus: { activateSession(group.session) },
+                onChat: { openChat(group.session) },
+                onOpenClient: { openClient(group.session) },
+                onArchive: { archiveSession(group.session) },
+                onTerminate: { terminateSession(group.session) },
+                onApprove: { approveSession(group.session) },
+                onApproveForSession: { approveSessionForScope(group.session) },
+                onReject: { rejectSession(group.session) }
+            )
+            .id(group.session.stableId)
+
+            if !group.childSessions.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(group.childSessions) { childSession in
+                        SubagentAttachmentRow(
+                            session: childSession,
+                            isSelected: selectedSessionStableID == childSession.stableId,
+                            isHighlighted: highlightedSessionStableID == childSession.stableId,
+                            onSelect: { selectSession(childSession) },
+                            onActivate: { activateSession(childSession) },
+                            onChat: { openChat(childSession) }
+                        )
+                        .id(childSession.stableId)
+                    }
+                }
+                .padding(.leading, 46)
+                .padding(.trailing, 0)
+                .padding(.top, 3)
+                .padding(.bottom, 5)
+            }
+        }
+    }
+
+    /// kero 独占行：点击后跳转到对应 kero pane
+    private func keroRowView(_ row: KeroSessionMerger.Row) -> some View {
+        KeroSessionRowView(
+            row: row,
+            onActivate: { activateKeroRow(row) }
+        )
+        .id(row.id)
     }
 
     private var instancesList: some View {
@@ -226,6 +330,31 @@ struct SessionListView: View {
         Task {
             let targetSession = await interactionTargetSession(for: session)
             _ = await SessionLauncher.shared.activate(targetSession)
+        }
+    }
+
+    /// T25：kero 独占行激活 —— 跳转到对应 kero pane
+    ///
+    /// 复用既有 TerminalSessionFocuser.focusKeroSession（kero 远程直跳入口）：
+    ///   · sessionId = kero 的 agentSession.id（跨 host 唯一精确匹配器）
+    ///   · cwd      = 目录兜底（agent 退出后 kero 清空会话时仍能命中 pane）
+    /// 远程 pane 的 tty 是远端设备路径，kero 侧仅扫本机 pane，故永不传。
+    private func activateKeroRow(_ row: KeroSessionMerger.Row) {
+        viewModel.notchClose()
+
+        Task {
+            await FocusDiagnosticsStore.shared.record(
+                "kero-inventory jump host=\(row.host) sessionId=\(row.agentSessionId ?? "nil") cwd=\(row.dir ?? "nil") paneId=\(row.paneId ?? "nil")"
+            )
+
+            let focused = await TerminalSessionFocuser.shared.focusKeroSession(
+                sessionId: row.agentSessionId,
+                cwd: row.dir
+            )
+
+            await FocusDiagnosticsStore.shared.record(
+                "kero-inventory jump result=\(focused) paneId=\(row.paneId ?? "nil")"
+            )
         }
     }
 
@@ -817,6 +946,22 @@ struct InstanceRow: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
+
+            // ── T27：置灰行右侧展开按钮 ──
+            // 行首单击统一为跳转（T26）后，展开入口消失；行尾补
+            // 一个恒定入口：点按钮展开/收起，点行内其余区域照旧
+            // 跳转。构造照抄 trailingActions 的 IconButton（.plain
+            // 样式 + 次要色，随行的置灰修饰），点击区走 actionButtonEdge
+            // 表驱动（18/22），低于 single-line 行头像高度（24/30pt），
+            // 不触碰行高常量。
+            if SessionListRowClickBehavior.showsExpandButton(isMinimalCompactPresentation: isMinimalCompactPresentation) {
+                IconButton(
+                    icon: isExpanded ? "chevron.down" : "chevron.right",
+                    size: SessionListCompactMetrics.actionButtonEdge(compactList: isCompactList)
+                ) {
+                    perform(SessionListRowClickBehavior.expandButtonTapAction())
+                }
+            }
         }
         .padding(.leading, 10)
         .padding(.trailing, 12)
@@ -851,9 +996,7 @@ struct InstanceRow: View {
                     }
                     .onTapGesture {
                         onSelect()
-                        perform(SessionListRowClickBehavior.primaryTapAction(
-                            isMinimalCompactPresentation: isMinimalCompactPresentation
-                        ))
+                        perform(SessionListRowClickBehavior.primaryTapAction())
                     }
             } else if isCodexSubagentCompactPresentation {
                 baseLeadingContent
@@ -863,9 +1006,7 @@ struct InstanceRow: View {
                     }
                     .onTapGesture {
                         onSelect()
-                        perform(SessionListRowClickBehavior.primaryTapAction(
-                            isMinimalCompactPresentation: isMinimalCompactPresentation
-                        ))
+                        perform(SessionListRowClickBehavior.primaryTapAction())
                     }
             } else {
                 baseLeadingContent
@@ -875,9 +1016,7 @@ struct InstanceRow: View {
                     }
                     .onTapGesture {
                         onSelect()
-                        perform(SessionListRowClickBehavior.primaryTapAction(
-                            isMinimalCompactPresentation: isMinimalCompactPresentation
-                        ))
+                        perform(SessionListRowClickBehavior.primaryTapAction())
                     }
             }
         }
@@ -1615,16 +1754,34 @@ enum SessionListRowClickAction: Equatable {
 }
 
 enum SessionListRowClickBehavior {
-    nonisolated static func primaryTapAction(
-        isMinimalCompactPresentation: Bool
-    ) -> SessionListRowClickAction {
-        isMinimalCompactPresentation ? .toggleExpanded : .activate
+    // ── T26：单击恒为激活跳转 ──
+    // 置灰（不活动）会话行与活动行单击行为一致：任何呈现形
+    // 态下行首单击都直接跳转对应终端面板。原「紧凑呈现单击
+    // = 展开」分支取消（悬停预览基本不收录置灰行，waitingForInput
+    // 且无待答提示的除外；展开入口见 T27）。
+    nonisolated static func primaryTapAction() -> SessionListRowClickAction {
+        .activate
     }
 
     nonisolated static func doubleTapAction(
         needsInAppResponse: Bool
     ) -> SessionListRowClickAction {
         needsInAppResponse ? .chat : .activate
+    }
+
+    // ── T27：置灰行右侧展开按钮 ──
+    // T26 把行首单击统一为跳转后，展开链（.toggleExpanded →
+    // onToggleExpanded → expandedSessionStableID）失去唯一生产
+    // 者；按钮恢复该入口，点击仍走 perform 统一分发。
+    nonisolated static func expandButtonTapAction() -> SessionListRowClickAction {
+        .toggleExpanded
+    }
+
+    // 仅置灰（不活动）行显示；展开态仍显示（图标换向下用于收
+    // 起），调用点不看 isExpanded。活动行在 T26 之前就无展开入
+    // 口，不扩范围。
+    nonisolated static func showsExpandButton(isMinimalCompactPresentation: Bool) -> Bool {
+        isMinimalCompactPresentation
     }
 }
 

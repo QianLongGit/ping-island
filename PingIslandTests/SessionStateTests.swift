@@ -1304,13 +1304,12 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(groups.first?.childSessions.map(\.sessionId), ["codex-nested-child", "codex-child"])
     }
 
-    func testSessionListPrimaryTapKeepsCompactRowsExpandable() {
+    // ── T26：不活动（置灰）会话行单击 = 跳转 ──
+    // 单击动作恒为 activate：置灰行与活动行行为一致；
+    // 置灰行不再就地展开，展开入口在行尾按钮（T27）。
+    func testSessionListPrimaryTapAlwaysActivates() {
         XCTAssertEqual(
-            SessionListRowClickBehavior.primaryTapAction(isMinimalCompactPresentation: true),
-            .toggleExpanded
-        )
-        XCTAssertEqual(
-            SessionListRowClickBehavior.primaryTapAction(isMinimalCompactPresentation: false),
+            SessionListRowClickBehavior.primaryTapAction(),
             .activate
         )
     }
@@ -1323,6 +1322,27 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(
             SessionListRowClickBehavior.doubleTapAction(needsInAppResponse: true),
             .chat
+        )
+    }
+
+    // ── T27：置灰行右侧展开按钮 ──
+    // T26 把行首单击统一为跳转后，「置灰行单击展开」的唯一入口
+    // 消失；展开能力改由行尾按钮承担，点击行为纯函数化以便单测。
+    func testSessionListExpandButtonAlwaysTogglesExpansion() {
+        XCTAssertEqual(
+            SessionListRowClickBehavior.expandButtonTapAction(),
+            .toggleExpanded
+        )
+    }
+
+    // 显示范围仅置灰（不活动）行；展开态仍显示（用于收起），
+    // 由调用点不看 isExpanded 保证，这里锁定「活动行绝不出现按钮」。
+    func testSessionListExpandButtonVisibleOnlyOnMinimalCompactRows() {
+        XCTAssertTrue(
+            SessionListRowClickBehavior.showsExpandButton(isMinimalCompactPresentation: true)
+        )
+        XCTAssertFalse(
+            SessionListRowClickBehavior.showsExpandButton(isMinimalCompactPresentation: false)
         )
     }
 
