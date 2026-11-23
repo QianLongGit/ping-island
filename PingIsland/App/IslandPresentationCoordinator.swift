@@ -72,7 +72,9 @@ final class IslandPresentationCoordinator {
             cursorWindowOffset: payload.cursorWindowOffset,
             windowSize: windowSize
         )
-        detachedWindowController.present(at: origin)
+        // 用户拖拽脱离 notch = 主动操作：显式激活保持抢焦点语义
+        //（present 默认值已翻转为非激活 —— T23）
+        detachedWindowController.present(at: origin, activatesApplication: true)
         AppSettings.surfaceMode = .floatingPet
     }
 

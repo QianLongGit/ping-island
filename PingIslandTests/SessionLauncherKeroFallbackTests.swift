@@ -63,11 +63,11 @@ final class SessionLauncherKeroFallbackTests: XCTestCase {
         )
     }
 
-    /// 安装 hook 并返回（sessionId 记录 + 结果注入）调用记录器
+    /// 安装 hook 并返回（sessionId/cwd 记录 + 结果注入）调用记录器
     private func installKeroFocusHook(result: Bool) -> KeroFocusCallRecorder {
         let recorder = KeroFocusCallRecorder()
-        TerminalSessionFocuser.focusKeroSessionHandlerForTesting = { sessionId in
-            await recorder.record(sessionId: sessionId)
+        TerminalSessionFocuser.focusKeroSessionHandlerForTesting = { sessionId, cwd in
+            await recorder.record(sessionId: sessionId, cwd: cwd)
             return result
         }
         return recorder
@@ -96,6 +96,12 @@ final class SessionLauncherKeroFallbackTests: XCTestCase {
             ["stale-ghostty-remote"],
             "兜底应精确透传原 sessionId 给 focusKeroSession"
         )
+        let routedCWDs = await recorder.cwds
+        XCTAssertEqual(
+            routedCWDs,
+            ["/Users/dev/project"],
+            "兜底应随 payload 补发 cwd 兜底凭据"
+        )
     }
 
     /// kero 标识远程会话：T6 早返回分支照旧直达 focusKeroSession
@@ -112,6 +118,12 @@ final class SessionLauncherKeroFallbackTests: XCTestCase {
             routedSessionIds,
             ["kero-identified-remote"],
             "早返回应只调用一次 focusKeroSession"
+        )
+        let routedCWDs = await recorder.cwds
+        XCTAssertEqual(
+            routedCWDs,
+            ["/Users/dev/project"],
+            "早返回应随 payload 补发 cwd 兜底凭据"
         )
     }
 
@@ -132,8 +144,10 @@ final class SessionLauncherKeroFallbackTests: XCTestCase {
 // ============================================================
 actor KeroFocusCallRecorder {
     private(set) var sessionIds: [String] = []
+    private(set) var cwds: [String] = []
 
-    func record(sessionId: String?) {
+    func record(sessionId: String?, cwd: String?) {
         sessionIds.append(sessionId ?? "<nil>")
+        cwds.append(cwd ?? "<nil>")
     }
 }

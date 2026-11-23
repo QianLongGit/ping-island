@@ -349,9 +349,15 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         fatalError("init(coder:) has not been implemented")
     }
 
+    // ============================================================
+    // MARK: - 窗口展示入口（T23：默认纯显示不抢焦点）
+    // ============================================================
+    /// 默认不激活应用：自动路径（如完成通知滞留后连带展示）仅
+    /// orderFront 显示，绝不抢占用户当前键盘焦点；用户主动路径
+    /// （拖拽 detach 等）须显式传 activatesApplication: true。
     func present(
         at origin: CGPoint,
-        activatesApplication: Bool = true,
+        activatesApplication: Bool = false,
         presentsAutomaticContent: Bool = true
     ) {
         guard let window else { return }
@@ -386,9 +392,10 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         }
     }
 
+    /// 语义同上（T23）：默认纯显示，激活须显式请求。
     func present(
         atPetAnchor petAnchor: CGPoint,
-        activatesApplication: Bool = true,
+        activatesApplication: Bool = false,
         presentsAutomaticContent: Bool = true
     ) {
         guard let window else { return }
@@ -426,10 +433,18 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         }
     }
 
+    // ============================================================
+    // MARK: - 窗口展示焦点策略（ForTesting 观测点）
+    // ============================================================
+    /// 记录最近一次 showWindow 调用的激活请求，供测试断言
+    /// 「自动完成通知展示不得激活应用抢占键盘焦点」（T23）。
+    private(set) var lastShowWindowActivatedApplicationForTesting: Bool?
+
     private func showWindow(
         _ window: NSWindow,
         activatesApplication: Bool
     ) {
+        lastShowWindowActivatedApplicationForTesting = activatesApplication
         if activatesApplication {
             NSApp.activate(ignoringOtherApps: false)
             showWindow(nil)

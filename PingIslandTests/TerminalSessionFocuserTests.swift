@@ -175,7 +175,7 @@ final class TerminalSessionFocuserTests: XCTestCase {
         XCTAssertTrue(url!.absoluteString.contains("tty=/dev/ttys012"))
     }
 
-    func testKeroJumpURLRemoteOnlyCarriesSession() {
+    func testKeroJumpURLRemoteCarriesSessionAndCWDButDropsTTY() {
         let url = TerminalSessionFocuser.keroJumpURL(
             sessionId: "abc-uuid",
             tty: "/dev/ttys012",
@@ -183,17 +183,38 @@ final class TerminalSessionFocuserTests: XCTestCase {
             isRemote: true
         )
 
-        // 远程 tty/cwd 是远程主机上的值，与本地 pane 不匹配 → 仅保留 session
-        XCTAssertEqual(url?.absoluteString, "kero://focus?session=abc-uuid")
+        // ============================================================
+        // 远程跳转参数语义（与 kero resolveJump 级联逐级对齐）：
+        // - tty 是远程主机上的设备路径，kero 侧 tty 级联仅扫本机
+        //   pane → 必须丢弃；
+        // - cwd 与 kero pane 的 WorkDir 同源（远程会话的
+        //   workspacePath 即远程 pane 工作目录），cwd 级联不限
+        //   host——agent 退出后 kero 清空 AgentSession，完成会话
+        //   的 session 级联必落空，cwd 是唯一兜底凭据 → 必须保留。
+        // ============================================================
+        XCTAssertEqual(
+            url?.absoluteString,
+            "kero://focus?session=abc-uuid&cwd=/Users/example/proj"
+        )
         XCTAssertFalse(url!.absoluteString.contains("tty="))
-        XCTAssertFalse(url!.absoluteString.contains("cwd="))
+    }
 
-        // 远程且无 session：即使有 tty/cwd 也全数丢弃 → 无可跳转凭据
+    func testKeroJumpURLRemoteWithoutSessionOrCWDReturnsNil() {
+        // 远程且 session/cwd 全空：tty 即使有值也不构成凭据 → nil
         XCTAssertNil(
             TerminalSessionFocuser.keroJumpURL(
                 sessionId: nil,
                 tty: "/dev/ttys012",
-                cwd: "/Users/example/proj",
+                cwd: nil,
+                isRemote: true
+            )
+        )
+        // 空白字符串视同缺失，session/cwd 全空仍返回 nil
+        XCTAssertNil(
+            TerminalSessionFocuser.keroJumpURL(
+                sessionId: "   ",
+                tty: nil,
+                cwd: "",
                 isRemote: true
             )
         )

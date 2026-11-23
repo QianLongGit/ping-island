@@ -319,29 +319,32 @@ actor TerminalSessionFocuser {
     // ============================================================
     // kero 远程 session 直跳入口
     // ------------------------------------------------------------
-    // 远程 session 只有 session id 一个有效凭据（远程 tty/cwd 是
-    // 远程主机上的值，与本地 pane 不匹配），open 成功即返回 true，
-    // 由 kero 侧按 session 级联（跨 host 的 AgentSession.ID 精确
-    // 匹配）激活窗口并解析 pane。
+    // session 是跨 host 唯一的精确匹配器：kero 侧按 AgentSession.ID
+    // 级联激活窗口并解析 pane。agent 退出后 kero 会清空该会话的
+    // AgentSession（"完成"会话的 session 级联必落空），此时 cwd
+    // 是兜底凭据——kero 的 cwd 级联按 pane WorkDir 匹配且不限
+    // host（远程 pane 的 WorkDir 与 payload 的 workspacePath 同
+    // 源），仍可精确命中开着的 pane。tty 是远程主机上的设备路
+    // 径，kero 侧 tty 级联仅扫本机 pane，故永不传。
     // ============================================================
-    func focusKeroSession(sessionId: String?) async -> Bool {
+    func focusKeroSession(sessionId: String?, cwd: String? = nil) async -> Bool {
         // ============================================================
         // 测试 hook：拦截真实 NSWorkspace.open，让单测能安全断言
         // SessionLauncher 各分支到 kero 跳转链的路由行为。
         // ============================================================
         if let handler = Self.focusKeroSessionHandlerForTesting {
-            return await handler(sessionId)
+            return await handler(sessionId, cwd)
         }
 
         guard let jumpURL = Self.keroJumpURL(
             sessionId: sessionId,
             tty: nil,
-            cwd: nil,
+            cwd: cwd,
             isRemote: true
         ) else {
-            logger.debug("No session id available for remote kero focus; skipping URL scheme jump")
+            logger.debug("No session id or cwd available for remote kero focus; skipping URL scheme jump")
             await FocusDiagnosticsStore.shared.record(
-                "TerminalFocus kero remote skip-no-session sessionId=\(sessionId ?? "nil")"
+                "TerminalFocus kero remote skip-no-credentials sessionId=\(sessionId ?? "nil") cwd=\(cwd ?? "nil")"
             )
             return false
         }
@@ -351,7 +354,7 @@ actor TerminalSessionFocuser {
         }
         logger.debug("Opened remote kero focus URL opened=\(opened, privacy: .public)")
         await FocusDiagnosticsStore.shared.record(
-            "TerminalFocus kero remote url-scheme sessionId=\(sessionId ?? "nil") success=\(opened)"
+            "TerminalFocus kero remote url-scheme sessionId=\(sessionId ?? "nil") cwd=\(cwd ?? "nil") success=\(opened)"
         )
         return opened
     }
@@ -938,12 +941,15 @@ actor TerminalSessionFocuser {
     }
 
     /// 测试专用 hook：非 nil 时 focusKeroSession 不再真实 open URL
-    static var focusKeroSessionHandlerForTesting: (@Sendable (String?) async -> Bool)?
+    /// （参数按 (sessionId, cwd) 透传，供断言远程跳转补发 cwd 兜底）
+    static var focusKeroSessionHandlerForTesting: (@Sendable (String?, String?) async -> Bool)?
 
     /// 构造 kero://focus 跳转 URL：
     /// - 空参数（nil / 空白）省略对应 query 项，三参全空返回 nil
-    /// - isRemote == true 时仅保留 session：远程 tty/cwd 是远程主机
-    ///   上的值，与本地 pane 不匹配，传了反而干扰 kero 侧级联
+    /// - isRemote == true 时丢弃 tty（远程 tty 是远程主机上的设备
+    ///   路径，kero 侧 tty 级联仅扫本机 pane），保留 session 与
+    ///   cwd：cwd 与 kero pane 的 WorkDir 同源，cwd 级联不限
+    ///   host，是 agent 退出后完成会话的兜底凭据
     /// - query 值由 URLComponents 自动 percent-encode（kero 侧 Go
     ///   url.Query().Get 自动解码还原）
     static func keroJumpURL(
@@ -961,9 +967,9 @@ actor TerminalSessionFocuser {
             if let ttyValue = sanitizedNonEmpty(tty) {
                 queryItems.append(URLQueryItem(name: "tty", value: ttyValue))
             }
-            if let cwdValue = sanitizedNonEmpty(cwd) {
-                queryItems.append(URLQueryItem(name: "cwd", value: cwdValue))
-            }
+        }
+        if let cwdValue = sanitizedNonEmpty(cwd) {
+            queryItems.append(URLQueryItem(name: "cwd", value: cwdValue))
         }
 
         guard !queryItems.isEmpty else {

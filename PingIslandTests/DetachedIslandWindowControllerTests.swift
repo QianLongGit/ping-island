@@ -1312,6 +1312,111 @@ final class DetachedIslandWindowControllerTests: XCTestCase {
         XCTAssertTrue(registry.pendingNotifications.isEmpty)
     }
 
+    // ================================================================
+    // MARK: - T23 自动完成弹窗不抢占键盘焦点
+    // ================================================================
+
+    func testHiddenFloatingWindowPresentDefaultsToNonActivatingShow() {
+        // 默认参数 present = 自动展示路径：通知弹出且不得激活应用
+        let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
+        AppSettings.autoOpenCompletionPanel = true
+        defer { AppSettings.autoOpenCompletionPanel = originalAutoOpenCompletionPanel }
+
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        let registry = SessionCompletionNotificationRegistry()
+        let sessionId = "silent-present-\(UUID().uuidString)"
+        let activityAt = Date()
+        let processing = makeCodexCompletedSession(id: sessionId, phase: .processing, lastActivity: activityAt)
+        let completed = makeCodexCompletedSession(id: sessionId, lastActivity: activityAt)
+        sessionMonitor.instances = [processing]
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            completionNotificationRegistry: registry,
+            onClose: {}
+        )
+        defer { controller.dismiss() }
+
+        // 窗口保持隐藏：完成通知滞留队列
+        controller.applySessionSnapshotForTesting([completed])
+        XCTAssertNil(controller.currentActiveCompletionNotificationForTesting)
+        XCTAssertEqual(registry.pendingNotifications.count, 1)
+
+        // 默认参数 present：通知弹出且不得激活应用抢占键盘焦点
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220))
+        XCTAssertEqual(controller.currentActiveCompletionNotificationForTesting?.session.sessionId, sessionId)
+        XCTAssertTrue(registry.pendingNotifications.isEmpty)
+        XCTAssertEqual(
+            controller.lastShowWindowActivatedApplicationForTesting,
+            false,
+            "自动完成弹窗展示必须走非激活路径，不得抢占键盘焦点"
+        )
+    }
+
+    func testCompletionNotificationAutoPresentationNeverActivatesApplication() {
+        // ============================================================
+        // T23 守卫：窗口可见时完成通知走 bubble 链自动弹出
+        // 全程不触发 showWindow 激活路径（spy 保持 false）
+        // 注：注入独立 registry——默认 .shared 单例会被同批先行的
+        // 完成通知测试污染（同 id 通知已消费），导致本测试受批内
+        // 执行顺序影响（单跑过、全类跑挂）
+        // ============================================================
+        let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
+        AppSettings.autoOpenCompletionPanel = true
+        defer { AppSettings.autoOpenCompletionPanel = originalAutoOpenCompletionPanel }
+
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        sessionMonitor.instances = [makeSession(id: "active", phase: .processing)]
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            // 测试隔离：注入独立 registry——默认 .shared 单例会与前序测试
+            // 消费的同 id 通知去重冲突，导致本测试通知不入队（全类跑挂根因）
+            completionNotificationRegistry: SessionCompletionNotificationRegistry(),
+            onClose: {},
+            shouldSuppressAttentionAutoOpen: { true }
+        )
+        defer { controller.dismiss() }
+
+        // 静默 present：窗口可见且不激活
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220), activatesApplication: false)
+        XCTAssertEqual(controller.lastShowWindowActivatedApplicationForTesting, false)
+
+        // 完成通知自动弹出（bubble 链，不经 showWindow 激活路径）
+        let completed = makeCompletedSession(id: "completed")
+        controller.applySessionSnapshotForTesting([completed])
+
+        let bubblePresented = expectation(description: "completion bubble auto-opens silently")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            XCTAssertEqual(controller.renderedBubbleStateForTesting, .hoverPreview)
+            XCTAssertEqual(
+                controller.lastShowWindowActivatedApplicationForTesting,
+                false,
+                "完成通知自动弹出不得触发激活路径"
+            )
+            bubblePresented.fulfill()
+        }
+
+        wait(for: [bubblePresented], timeout: 1.0)
+    }
+
+    func testExplicitPresentStillActivatesApplication() {
+        // 用户主动路径：显式请求激活必须保持抢焦点语义
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            onClose: {}
+        )
+        defer { controller.dismiss() }
+
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220), activatesApplication: true)
+        XCTAssertEqual(controller.lastShowWindowActivatedApplicationForTesting, true)
+    }
+
     func testCodexCompletionBubbleOpensWhileClaudeSessionIsActive() {
         let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
         AppSettings.autoOpenCompletionPanel = true

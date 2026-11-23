@@ -63,12 +63,18 @@ actor SessionLauncher {
         // 载体猎取对 kero 必然落空。命中 kero bundle 双变体时改走
         // focusKeroSession（kero://focus URL scheme，kero 侧按远程
         // session 级联激活窗口），无条件提前返回；非 kero 远程会话
-        // 行为零改动，照旧落入载体猎取瀑布。
+        // 行为零改动，照旧落入载体猎取瀑布。cwd 随 payload 补发：
+        // agent 退出后 kero 清空完成会话的 AgentSession，session
+        // 级联落空时由 cwd 级联（pane WorkDir 匹配，不限 host）
+        // 兜底命中仍在开着的 pane。
         // ============================================================
         if session.isRemoteSession,
            let terminalBundleIdentifier = session.clientInfo.terminalBundleIdentifier,
            TerminalSessionFocuser.keroIsHandledBundleIdentifier(terminalBundleIdentifier) {
-            let focused = await TerminalSessionFocuser.shared.focusKeroSession(sessionId: session.sessionId)
+            let focused = await TerminalSessionFocuser.shared.focusKeroSession(
+                sessionId: session.sessionId,
+                cwd: session.cwd
+            )
             Self.logger.debug("Activated remote kero session \(session.sessionId, privacy: .public) via URL scheme jump focused=\(focused)")
             await FocusDiagnosticsStore.shared.record(
                 "SessionLauncher remote-kero jump session=\(session.sessionId) bundle=\(terminalBundleIdentifier) success=\(focused)"
@@ -89,11 +95,13 @@ actor SessionLauncher {
             // 在 daemon 内部完成，本机并无 ssh 载体进程，载体猎取
             // 对这类会话必然落空。此处改走 focusKeroSession——kero
             // 侧按远程 session 级联激活（restore 绑定仍在即可跳），
-            // Mac 本机无 kero 时 open 失败无害，兜底失败则继续落入
-            // 下方既有瀑布，非 kero 远程会话行为不变。
+            // cwd 一并补发兜底完成会话（同早返回分支）；Mac 本机无
+            // kero 时 open 失败无害，兜底失败则继续落入下方既有瀑
+            // 布，非 kero 远程会话行为不变。
             // ============================================================
             let focusedViaKeroFallback = await TerminalSessionFocuser.shared.focusKeroSession(
-                sessionId: session.sessionId
+                sessionId: session.sessionId,
+                cwd: session.cwd
             )
             if focusedViaKeroFallback {
                 Self.logger.debug(
