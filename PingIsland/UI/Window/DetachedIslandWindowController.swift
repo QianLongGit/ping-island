@@ -1427,6 +1427,13 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
 
         scheduleDelayedManualAttentionPresentationIfNeeded()
 
+        // 远程回放新鲜度闸门（Task 28）：过期事件的 attention 只更新
+        // 状态与徽标，不再自动展开提示。tracker 的边沿已在上面
+        // consume 中照常消化，之后空闲不会重放旧通知。
+        if !targetSession.hasFreshNotificationActivity() {
+            return
+        }
+
         dismissActiveCompletionNotification(closeBubble: false, advanceQueue: false)
 
         if interactionModel.bubbleState == .pinned {

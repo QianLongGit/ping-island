@@ -345,7 +345,17 @@ enum SessionCompletionNotificationPolicy {
         _ session: SessionState,
         now: Date = Date()
     ) -> Bool {
-        now.timeIntervalSince(session.lastActivity) <= notificationRecencyWindow
+        // ═════════════════════════════════════════════════════
+        // 远程回放新鲜度闸门（Task 28）：outbox 回放会把接收时间
+        // 刷成 now、击穿下面的 60 秒 recency 窗口；这里按事件的
+        // 真实发生时间（lastEventOccurredAt）先行拦截——过期事件
+        // 的完成/结束/压缩卡一律不入队。缺席（本地/旧 bridge）恒
+        // 新鲜，叠加在现有窗口之外、不替换现有逻辑。
+        // ═════════════════════════════════════════════════════
+        guard session.hasFreshNotificationActivity(now: now) else {
+            return false
+        }
+        return now.timeIntervalSince(session.lastActivity) <= notificationRecencyWindow
     }
 
     private static func isCodexCompletionSourcePhase(_ phase: SessionPhase) -> Bool {

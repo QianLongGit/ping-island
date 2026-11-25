@@ -256,10 +256,16 @@ enum DetachedIslandContentModel {
             let height = viewModel.maximumOpenedHeight
             return CGSize(width: width, height: height)
         case .hoverDashboard:
+            // ── T29：全量会话线性估高，取消 3 行上限 ──────────────
+            // 行数按活动会话全量计（不再 min(…, 3)），行高 94 为
+            // detached 旧密度常量（与 docked 62 不同源是已知遗留）；
+            // 封顶改用 maximumOpenedHeight（= min(屏高-120,
+            // AppSettings.maxPanelHeight)），与 docked 预览同源，
+            // 超出部分在 SessionHoverDashboardView 的 ScrollView 内滚动。
             let width = min(widthLimit, 392)
-            let visibleCount = max(min(IslandExpandedRouteResolver.activePreviewSessions(from: sessions).count, 3), 1)
-            let estimatedHeight = 18 + (CGFloat(visibleCount) * 94)
-            let height = min(viewModel.screenRect.height - 160, max(120, estimatedHeight))
+            let visibleCount = max(IslandExpandedRouteResolver.activePreviewSessions(from: sessions).count, 1)
+            let estimatedHeight = 18 + CGFloat(visibleCount) * 94
+            let height = min(viewModel.maximumOpenedHeight, max(120, estimatedHeight))
             return CGSize(width: width, height: height)
         case .attentionNotification(let session):
             let width = min(widthLimit, 392)

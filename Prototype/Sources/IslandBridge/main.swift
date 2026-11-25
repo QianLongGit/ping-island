@@ -1185,7 +1185,9 @@ private final class RemoteAgentService: @unchecked Sendable {
         let hello = RemoteDaemonHello(
             type: "hello",
             version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
-            hostname: ProcessInfo.processInfo.hostName
+            hostname: ProcessInfo.processInfo.hostName,
+            // FIX1：携带 bridge 本机时钟基准，随每次握手重新标定
+            now: Date()
         )
         guard let data = try? encoder.encode(hello) + Data("\n".utf8) else { return }
         if !writeControlData(data) { disconnectControlClient() }
@@ -2017,6 +2019,14 @@ struct RemoteHookEventPayload: Codable {
     // custom-title/summary；读取失败/无记录为 nil。App 侧可选
     // 解码，旧 App 与旧 bridge 双向兼容。
     let conversationTitle: String?
+    // ─────────────────────────────────────────────────────
+    // 事件发生时间（Task 28）：事件进入 bridge 转发管线的那一刻
+    // 打戳（实时转发与 outbox 入队共用同一构造点，flush/重放不得
+    // 刷新）。App 侧用它做"过期事件只更新状态、不再提示"的新鲜
+    // 度闸门；旧 App 忽略该字段，旧 bridge 缺字段解码为 nil（视为
+    // 新鲜），双向兼容。编码沿用 wire 既有 Date 风格（Codable 默认）。
+    // ─────────────────────────────────────────────────────
+    let occurredAt: Date?
     let clientInfo: RemoteHookClientInfoPayload
 }
 
@@ -2029,6 +2039,13 @@ private struct RemoteDaemonHello: Codable {
     let type: String
     let version: String
     let hostname: String
+    // ─────────────────────────────────────────────────────
+    // 远端时钟基准（Task 28 FIX1）：bridge 本机时钟，App 侧握手时
+    // 据此标定跨主机时钟偏移（App 时钟 = 远端时钟 + offset），并在
+    // 事件入站时把 occurredAt 归一化到 App 时钟，消除闸门里的跨
+    // 主机时钟比较。可选字段——旧 App 忽略未知键，双向兼容。
+    // ─────────────────────────────────────────────────────
+    let now: Date?
 }
 
 private struct RemoteDecisionEnvelope: Codable {
@@ -2190,6 +2207,9 @@ enum RemoteBridgeMessageBuilder {
             // 远程会话标题透传（Task 11）：尾部读取远程转写（≤128KB
             // seek），失败静默 nil，绝不阻塞事件发送（<5ms 预算）
             conversationTitle: TranscriptTitleReader.latestTitle(transcriptPath: sessionFilePath),
+            // 发生时间打戳（Task 28）：hook 连上 bridge 即事件发生时刻，
+            // 实时转发与 outbox 入队在此共用同一戳，flush/重放不刷新
+            occurredAt: Date(),
             clientInfo: RemoteHookClientInfoPayload(
                 kind: clientKind(for: envelope),
                 profileID: metadata["client_kind"],
@@ -2241,6 +2261,10 @@ enum RemoteBridgeMessageBuilder {
             // codex thread 快照来自远端 SQLite 而非 jsonl 转写，
             // 无尾部标题可读，恒 nil（真实 hook 事件才是标题来源）
             conversationTitle: nil,
+            // 发生时间打戳（Task 28）：用 SQLite 里的线程更新时刻而非
+            // 轮询发现时刻——bridge 重启后 15 分钟窗口内的线程重发由此
+            // 保留真实旧时间，App 侧可正确判为过期不提示
+            occurredAt: Date(timeIntervalSince1970: Double(thread.updatedAtMs) / 1_000),
             clientInfo: RemoteHookClientInfoPayload(
                 kind: "codexCLI",
                 profileID: "codex-cli",

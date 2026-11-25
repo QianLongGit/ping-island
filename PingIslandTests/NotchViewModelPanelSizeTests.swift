@@ -149,6 +149,27 @@ final class NotchViewModelPanelSizeTests: XCTestCase {
         }
     }
 
+    // ── T29：hover 估算线性无 3 卡封顶 + 设置上限压制 ────────────
+    func testHoverPreviewEstimateScalesBeyondThreeCardsAndRespectsSettingCap() async {
+        await MainActor.run {
+            let originalMaxPanelHeight = AppSettings.maxPanelHeight
+            defer { AppSettings.maxPanelHeight = originalMaxPanelHeight }
+            AppSettings.maxPanelHeight = 700
+
+            let viewModel = makeViewModel()
+            viewModel.notchOpen(reason: .hover)
+
+            // 6 卡：32 + 12 + (12 + 62×6 + 18×5 + 18) = 536，
+            // 估算公式按卡数线性，不因视图历史 3 行上限回缩
+            viewModel.updateHoverPreviewSessionCount(6)
+            XCTAssertEqual(viewModel.openedSize.height, 536, accuracy: 0.01)
+
+            // 设置最大面板高度压到 480 → 需求高 536 被设置上限收口
+            AppSettings.maxPanelHeight = 480
+            XCTAssertEqual(viewModel.openedSize.height, 480, accuracy: 0.01)
+        }
+    }
+
     func testDockedInstancesHoverPreviewMeasuredHeightTakesOverEstimate() async {
         await MainActor.run {
             let originalMaxPanelHeight = AppSettings.maxPanelHeight

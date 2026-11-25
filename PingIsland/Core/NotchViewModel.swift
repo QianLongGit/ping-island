@@ -58,8 +58,9 @@ class NotchViewModel: ObservableObject {
     //   上报；isNotificationPresentationActive：完成通知卡是否正
     //   在面板内呈示，呈示时以通知卡最低高度兜底内容需求；
     //   hoverPreviewSessionCount：hover 预览 dashboard 的会话卡数
-    //   （≤3），由 hoverPreviewSessionsProvider 派生更新
-    //   （唯一更新点 updateHoverPreviewSessionCount），驱动预览估算高。
+    //   （= 活动会话全量，T29 起不再按 3 封顶），由
+    //   hoverPreviewSessionsProvider 派生更新（唯一更新点
+    //   updateHoverPreviewSessionCount），驱动预览估算高。
     @Published private(set) var instanceRowCount: Int = 0
     @Published private(set) var hoverPreviewSessionCount: Int = 0
     @Published private(set) var isNotificationPresentationActive: Bool = false

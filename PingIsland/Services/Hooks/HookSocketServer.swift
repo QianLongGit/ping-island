@@ -91,6 +91,10 @@ struct HookEvent: Sendable {
     /// 读出的 custom-title/summary）。本地路径恒为 nil——本地
     /// ConversationParser 直读转写是权威来源，此处注入会造成双写竞争。
     let conversationTitle: String?
+    /// 事件发生时间（Task 28）：仅远程 bridge wire 携带（事件进入远端
+    /// 转发管线的时刻）。本地路径恒为 nil，语义等价于"总是新鲜"，
+    /// 既有本地提示行为分毫不变。
+    let occurredAt: Date?
 
     nonisolated init(
         sessionId: String,
@@ -111,7 +115,8 @@ struct HookEvent: Sendable {
         bridgeExpectsResponse: Bool? = nil,
         suppressInAppPrompt: Bool = false,
         codexBypassPermissions: Bool = false,
-        conversationTitle: String? = nil
+        conversationTitle: String? = nil,
+        occurredAt: Date? = nil
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
@@ -132,6 +137,7 @@ struct HookEvent: Sendable {
         self.suppressInAppPrompt = suppressInAppPrompt
         self.codexBypassPermissions = codexBypassPermissions
         self.conversationTitle = conversationTitle
+        self.occurredAt = occurredAt
     }
 
     nonisolated var sessionPhase: SessionPhase {

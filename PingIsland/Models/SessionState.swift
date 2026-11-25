@@ -125,6 +125,17 @@ struct SessionState: Equatable, Identifiable, Sendable {
     var lastActivity: Date
     var createdAt: Date
 
+    // ═════════════════════════════════════════════════════
+    // 远程事件新鲜度（Task 28）
+    //
+    // 最近一次被采纳事件的发生时间。远程 bridge wire 携带
+    // occurredAt 时由 SessionStore 写入；本地事件与旧 bridge
+    // 恒为 nil，语义等价于"总是新鲜"。该字段只服务于提示类
+    // 判定（完成卡/边沿声音/attention 自动展开的新鲜度闸门），
+    // 不参与身份判定，也不改变 lastActivity 的任何既有语义。
+    // ═════════════════════════════════════════════════════
+    var lastEventOccurredAt: Date?
+
     // MARK: - Identifiable
 
     var id: String { sessionId }
@@ -173,6 +184,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         compactionSequence: UInt64 = 0,
         lastActivity: Date = Date(),
         createdAt: Date = Date(),
+        lastEventOccurredAt: Date? = nil,
         lifecycleIncarnationID: UUID = UUID()
     ) {
         self.sessionId = sessionId
@@ -214,9 +226,27 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.needsClearReconciliation = needsClearReconciliation
         self.lastActivity = lastActivity
         self.createdAt = createdAt
+        self.lastEventOccurredAt = lastEventOccurredAt
     }
 
     // MARK: - Derived Properties
+
+    /// ═════════════════════════════════════════════════════
+    /// 远程回放新鲜度阈值（Task 28）：事件发生时间距判定时刻的
+    /// 滞后超过该值即视为"过期事件"，只更新状态、不再提示。
+    /// 120 秒远大于正常 SSH 实时链路滞后（秒级），远小于任何
+    /// "离开一阵子"的 outbox 回放（分钟至小时级）；两端时钟
+    /// 分钟级偏移也不致误判。具名常量便于日后按反馈调整。
+    /// ═════════════════════════════════════════════════════
+    nonisolated static let remoteEventStalenessThreshold: TimeInterval = 120
+
+    /// 提示类副作用的统一新鲜度闸门（Task 28）：occurredAt 缺席
+    /// （本地事件 / 旧 bridge）恒为真，绝不误杀实时提示；远程事件
+    /// 按滞后量判定。只压提示，不影响状态更新。
+    nonisolated func hasFreshNotificationActivity(now: Date = Date()) -> Bool {
+        guard let occurredAt = lastEventOccurredAt else { return true }
+        return now.timeIntervalSince(occurredAt) <= Self.remoteEventStalenessThreshold
+    }
 
     /// Legacy phase-level attention, including an ordinary completed turn.
     /// Use needsManualAttention for actionable prompts and presentation priority.

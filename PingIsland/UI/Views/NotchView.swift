@@ -1092,17 +1092,99 @@ struct NotchView: View {
         detachmentHintPresentationWorkItem = nil
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // 远程回放新鲜度闸门（Task 28 FIX2）—— docked 面提示副作用判定
+    //
+    // 第 35 审指出两条只存在于 docked 面的漏网路径：
+    //   1. pending 边沿自动开槽（handlePendingSessionsChange）
+    //   2. completed-ready 弹跳 + 30 秒勾选角标（handleCompletedReadyChange）
+    // 过期回放（滞后 > 120 秒）只允许更新状态，不得触发以上提示。
+    // 判定抽成静态纯函数：单测可直接驱动，不依赖 SwiftUI 运行时；
+    // 吸收语义（absorbedIds 含过期 id）一并编码进返回值——过期边沿
+    // 照常吸收进 previous，同一事件后续重放不再进入判定，状态更新
+    // 与去重语义不被闸门压住。新鲜 / 本地 / 旧 bridge（无戳）恒放行。
+    // ════════════════════════════════════════════════════════════════
+
+    /// 提示闸门判定结果：freshNewIds 只含"新出现且新鲜"的会话 id，
+    /// absorbedIds 是本轮应写回 previous 的全量 id（含过期）。
+    nonisolated struct NotchPresentationGateDecision: Equatable, Sendable {
+        var freshNewIds: Set<String>
+        var absorbedIds: Set<String>
+    }
+
+    /// pending 边沿闸门：输入即 pendingInstances（已按
+    /// needsManualAttention 过滤的集合），只对新出现且新鲜的会话
+    /// 放行"自动开槽"。
+    nonisolated static func evaluatePendingPresentationGate(
+        _ sessions: [SessionState],
+        previous: Set<String>,
+        now: Date = Date()
+    ) -> NotchPresentationGateDecision {
+        let currentIds = Set(sessions.map(\.stableId))
+        let newIds = currentIds.subtracting(previous)
+        let freshNewIds = newIds.isEmpty
+            ? []
+            : Set(
+                sessions
+                    .filter {
+                        newIds.contains($0.stableId)
+                            && $0.hasFreshNotificationActivity(now: now)
+                    }
+                    .map(\.stableId)
+            )
+        return NotchPresentationGateDecision(
+            freshNewIds: freshNewIds,
+            absorbedIds: currentIds
+        )
+    }
+
+    /// completed-ready 边沿闸门：输入为全量 instances，先按完成就绪
+    /// 语义取集合，再只对新出现且新鲜的会话放行"弹跳 + 勾选角标"。
+    nonisolated static func evaluateCompletedReadyPresentationGate(
+        _ sessions: [SessionState],
+        previous: Set<String>,
+        now: Date = Date()
+    ) -> NotchPresentationGateDecision {
+        let completedIds = Set(
+            sessions
+                .filter { SessionCompletionStateEvaluator.isCompletedReadySession($0) }
+                .map(\.stableId)
+        )
+        let newIds = completedIds.subtracting(previous)
+        let freshNewIds = newIds.isEmpty
+            ? []
+            : Set(
+                sessions
+                    .filter {
+                        newIds.contains($0.stableId)
+                            && $0.hasFreshNotificationActivity(now: now)
+                    }
+                    .map(\.stableId)
+            )
+        return NotchPresentationGateDecision(
+            freshNewIds: freshNewIds,
+            absorbedIds: completedIds
+        )
+    }
+
     private func handlePendingSessionsChange(_ sessions: [SessionState]) {
-        let currentIds = Set(sessions.map { $0.stableId })
-        let newPendingIds = currentIds.subtracting(previousPendingIds)
+        // ── 远程回放新鲜度闸门（Task 28 FIX2）─────────────────────
+        // 过期回放的 pending 边沿只挡"自动开槽"这一提示副作用；
+        // previous 吸收（absorbedIds，含过期 id）照常进行，后续
+        // 重放不再进入判定。状态更新不经过此函数，不受影响。
+        let decision = Self.evaluatePendingPresentationGate(
+            sessions,
+            previous: previousPendingIds
+        )
+        let newPendingIds = decision.freshNewIds
 
         if areReminderNotificationsSuppressed {
-            previousPendingIds = currentIds
+            previousPendingIds = decision.absorbedIds
             return
         }
 
         if viewModel.shouldSuppressAutomaticPresentation {
-            previousPendingIds = currentIds
+            previousPendingIds = decision.absorbedIds
             return
         }
 
@@ -1112,7 +1194,7 @@ struct NotchView: View {
             viewModel.notchOpen(reason: .notification)
         }
 
-        previousPendingIds = currentIds
+        previousPendingIds = decision.absorbedIds
     }
 
     private func primeStartupPresentationState(_ instances: [SessionState]) {
@@ -1176,6 +1258,13 @@ struct NotchView: View {
             return
         }
 
+        // 远程回放新鲜度闸门（Task 28）：过期事件的 attention 只更新
+        // 状态与徽标，不再自动展开提示。tracker 的边沿已在上面
+        // consume 中照常消化，之后空闲不会重放旧通知。
+        if !targetSession.hasFreshNotificationActivity() {
+            return
+        }
+
         dismissActiveCompletionNotification(closePanel: false, advanceQueue: false)
 
         if viewModel.shouldSuppressAutomaticPresentation {
@@ -1213,10 +1302,18 @@ struct NotchView: View {
     }
 
     private func handleCompletedReadyChange(_ instances: [SessionState]) {
-        let completedSessions = instances.filter { SessionCompletionStateEvaluator.isCompletedReadySession($0) }
-        let completedIds = Set(completedSessions.map(\.stableId))
-        let newCompletedIds = completedIds.subtracting(previousCompletedReadyIds)
+        // ── 远程回放新鲜度闸门（Task 28 FIX2）─────────────────────
+        // 过期回放的完成边沿不写 30 秒勾选角标、不触发弹跳；previous
+        // 吸收（absorbedIds，含过期完成 id）与 stale 清理照常——后续
+        // 重放不再进入判定，列表 / 徽标等状态更新不经此函数。
+        let decision = Self.evaluateCompletedReadyPresentationGate(
+            instances,
+            previous: previousCompletedReadyIds
+        )
+        let newCompletedIds = decision.freshNewIds
+        let completedIds = decision.absorbedIds
 
+        let completedSessions = instances.filter { SessionCompletionStateEvaluator.isCompletedReadySession($0) }
         let now = Date()
         for session in completedSessions where newCompletedIds.contains(session.stableId) {
             completionReadyTimestamps[session.stableId] = now

@@ -471,6 +471,19 @@ actor SessionStore {
         session.clientInfo = normalizedClientInfo(session.clientInfo, merging: event.clientInfo, provider: event.provider, sessionId: sessionId)
         session.ingress = event.ingress
         session.connectionState = .connected
+        // ─────────────────────────────────────────────────
+        // 远程事件发生时间（Task 28 + FIX-2）：随事件记录，供提示类
+        // 判定的新鲜度闸门使用。单调取新——更早的过期回放不得覆盖
+        // 已记录的更新发生时间，否则实时事件之后到达的一条回放会把
+        // 该会话的后续提示误压。无发生时间（本地事件/旧 bridge）置
+        // nil，语义等价于"总是新鲜"。状态更新（相位/标题/徽标/
+        // lastActivity）不受该闸门影响。
+        // ─────────────────────────────────────────────────
+        if let occurredAt = event.occurredAt {
+            session.lastEventOccurredAt = max(session.lastEventOccurredAt ?? occurredAt, occurredAt)
+        } else {
+            session.lastEventOccurredAt = nil
+        }
         applyHookWorkspace(event.cwd, to: &session)
         session.pid = event.pid
         if canInspectProcessLocally, let pid = event.pid {

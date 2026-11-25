@@ -163,6 +163,13 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
     var agentVersion: String?
     var lastConnectedAt: Date?
     var lastBootstrapAt: Date?
+    // ─────────────────────────────────────────────────────
+    // 跨主机时钟偏移（Task 28 FIX1）：App 时钟 = 远端时钟 + 偏移。
+    // 每次握手由 hello.now 重新标定（覆盖长时间连接后的漂移），
+    // 事件入站时用它把 occurredAt 归一化到 App 时钟。默认 0，
+    // 旧持久化文件缺字段解码为 0（行为不变）。
+    // ─────────────────────────────────────────────────────
+    var remoteClockOffset: TimeInterval = 0
 
     init(
         id: UUID = UUID(),
@@ -179,7 +186,8 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
         remoteControlSocketPath: String = "~/.ping-island/run/agent-control.sock",
         agentVersion: String? = nil,
         lastConnectedAt: Date? = nil,
-        lastBootstrapAt: Date? = nil
+        lastBootstrapAt: Date? = nil,
+        remoteClockOffset: TimeInterval = 0
     ) {
         let parsedLink = RemoteSSHLink(sshTarget: sshTarget)
         let effectivePort = sshPort == RemoteSSHLink.defaultPort
@@ -201,6 +209,7 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
         self.agentVersion = agentVersion
         self.lastConnectedAt = lastConnectedAt
         self.lastBootstrapAt = lastBootstrapAt
+        self.remoteClockOffset = remoteClockOffset
     }
 
     var resolvedTitle: String {
@@ -261,6 +270,7 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
         case agentVersion
         case lastConnectedAt
         case lastBootstrapAt
+        case remoteClockOffset
     }
 
     init(from decoder: Decoder) throws {
@@ -284,6 +294,7 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
         agentVersion = try container.decodeIfPresent(String.self, forKey: .agentVersion)
         lastConnectedAt = try container.decodeIfPresent(Date.self, forKey: .lastConnectedAt)
         lastBootstrapAt = try container.decodeIfPresent(Date.self, forKey: .lastBootstrapAt)
+        remoteClockOffset = try container.decodeIfPresent(TimeInterval.self, forKey: .remoteClockOffset) ?? 0
     }
 
     func encode(to encoder: Encoder) throws {
@@ -303,6 +314,7 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
         try container.encodeIfPresent(agentVersion, forKey: .agentVersion)
         try container.encodeIfPresent(lastConnectedAt, forKey: .lastConnectedAt)
         try container.encodeIfPresent(lastBootstrapAt, forKey: .lastBootstrapAt)
+        try container.encode(remoteClockOffset, forKey: .remoteClockOffset)
     }
 }
 
@@ -389,6 +401,15 @@ struct RemoteHookEventPayload: Codable, Sendable {
     // custom-title/summary，顶层透传（camelCase wire 惯例）。可选
     // 解码——旧 bridge 缺字段/显式 null 均得 nil，双向兼容。
     let conversationTitle: String?
+    // ─────────────────────────────────────────────────────
+    // 事件发生时间（Task 28）：bridge 在事件进入转发管线时打戳，
+    // outbox 持久化与重放不刷新。App 用它与接收时刻的滞后量做
+    // "过期事件只更新状态、不再提示"的新鲜度闸门。旧 bridge 缺
+    // 字段解码为 nil → 视为新鲜（按现有行为处理，不误杀）。
+    // 编码沿用 wire 既有 Date 风格（Codable 默认，同 codexUsage
+    // 快照的 capturedAt 通道）。
+    // ─────────────────────────────────────────────────────
+    let occurredAt: Date?
     let clientInfo: RemoteHookClientInfoPayload
 }
 
@@ -396,6 +417,9 @@ struct RemoteDaemonHello: Codable, Sendable {
     let type: String
     let version: String
     let hostname: String
+    // 远端时钟基准（Task 28 FIX1）：bridge 本机时钟，握手时据此标定
+    // 跨主机时钟偏移；旧 bridge 缺字段解码为 nil → 偏移 0（行为不变）。
+    let now: Date?
 }
 
 struct RemoteHookEventMessage: Codable, Sendable {

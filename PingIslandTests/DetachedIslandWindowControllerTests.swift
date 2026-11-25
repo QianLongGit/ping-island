@@ -863,6 +863,75 @@ final class DetachedIslandWindowControllerTests: XCTestCase {
         XCTAssertEqual(withFooter, 600, accuracy: 0.5)
     }
 
+    // ═════════════════════════════════════════════════════════════
+    // MARK: hover 预览气泡高度（T29：全量会话线性 + 设置上限封顶）
+    //
+    // 消费链锚点：宠物悬停 → route .hoverDashboard →
+    // DetachedIslandContentModel.bubbleContentSize(.hoverDashboard)
+    // → bubbleFrame → 气泡 .frame(height:)。高度 = 18 + 会话数 ×
+    // 94（不按 3 封顶），封顶取 maximumOpenedHeight（= min(屏高
+    // -120, maxPanelHeight)），与 docked 预览同源；超出部分在
+    // SessionHoverDashboardView 的 ScrollView 内滚动。
+    // ═════════════════════════════════════════════════════════════
+
+    func testHoverDashboardBubbleHeightScalesWithFullSessionCount() {
+        let originalMaxPanelHeight = AppSettings.maxPanelHeight
+        AppSettings.maxPanelHeight = 700
+        defer { AppSettings.maxPanelHeight = originalMaxPanelHeight }
+        let viewModel = makeViewModel()
+
+        // 6 会话：18 + 6×94 = 582（修复前 min(count,3) 只算 3 张 = 300）
+        let sixSessions = (1...6).map { makeSession(id: "hover-\($0)", phase: .processing) }
+        let sixHeight = DetachedIslandContentModel.bubbleContentSize(
+            for: .hoverDashboard,
+            sessions: sixSessions,
+            viewModel: viewModel
+        ).height
+        XCTAssertEqual(sixHeight, 582, accuracy: 0.01)
+
+        // 12 会话：18 + 12×94 = 1146 → 设置上限 700 收口
+        // （旧封顶 screenRect.height - 160 = 740 会放行到 740）
+        let twelveSessions = (1...12).map { makeSession(id: "hover-\($0)", phase: .processing) }
+        let twelveHeight = DetachedIslandContentModel.bubbleContentSize(
+            for: .hoverDashboard,
+            sessions: twelveSessions,
+            viewModel: viewModel
+        ).height
+        XCTAssertEqual(twelveHeight, 700, accuracy: 0.01)
+    }
+
+    func testHoverDashboardBubbleHeightRespectsSettingCap() {
+        let originalMaxPanelHeight = AppSettings.maxPanelHeight
+        AppSettings.maxPanelHeight = 480
+        defer { AppSettings.maxPanelHeight = originalMaxPanelHeight }
+        let viewModel = makeViewModel()
+
+        // 6 会话需求高 582，被设置上限 480 压制（读取 maxPanelHeight）
+        let sixSessions = (1...6).map { makeSession(id: "hover-\($0)", phase: .processing) }
+        let sixHeight = DetachedIslandContentModel.bubbleContentSize(
+            for: .hoverDashboard,
+            sessions: sixSessions,
+            viewModel: viewModel
+        ).height
+        XCTAssertEqual(sixHeight, 480, accuracy: 0.01)
+    }
+
+    func testHoverDashboardBubbleHeightKeepsLowSessionCountEstimate() {
+        let originalMaxPanelHeight = AppSettings.maxPanelHeight
+        AppSettings.maxPanelHeight = 700
+        defer { AppSettings.maxPanelHeight = originalMaxPanelHeight }
+        let viewModel = makeViewModel()
+
+        // 2 会话：18 + 2×94 = 206（≤3 行估算不受去 cap 影响，回归保护）
+        let twoSessions = (1...2).map { makeSession(id: "hover-\($0)", phase: .processing) }
+        let twoHeight = DetachedIslandContentModel.bubbleContentSize(
+            for: .hoverDashboard,
+            sessions: twoSessions,
+            viewModel: viewModel
+        ).height
+        XCTAssertEqual(twoHeight, 206, accuracy: 0.01)
+    }
+
     /// 视图消费链：layout 产出的 bubbleFrame 必须原样承载
     /// bubbleContentSize(.sessionList) 的高度（含 maxPanelHeight 上限）。
     /// 这是「公式 → 窗口布局」的接线断言，防止公式修了视图不用。

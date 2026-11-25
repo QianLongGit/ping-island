@@ -151,11 +151,13 @@ for z in *.zip; do unzip -l "$z"; done
 sha256sum *.zip
 ```
 
-验证点：每个 zip 列表恰 1 个条目、文件名=zip 名去后缀；musl 名与 legacy 名的 zip sha256 两两相同（同一二进制双名分发）。
+验证点：每个 zip 列表恰 1 个条目、文件名=zip 名去后缀；同 arch 的 musl 名与 legacy 名 **内层二进制逐字节相同**（`cmp` 为 0）。⚠️ 两个 zip 的 sha256 **不**相同——zip 归档内记录了文件名，双名分发必然产生不同 sha，属正常，不要误判为打包错误。
 
 ⚠️ **sha256 以最终上传集为唯一事实源**：中间打包产物/旧报告里的 sha 表可能过时（实战中 t8fix 报告的 /tmp zip 表是旧动态版，误导过一轮）。任何不一致，以实际推上 release 的资产为准。
 
 ## 第 4 步：tag 与 release（本机 gh）
+
+⚠️ **每个 gh 命令必须带 `-R QianLongGit/ping-island`**：本 clone 有两个远端（origin=自己的仓库、upstream=官方）。未设默认仓库时 gh 会解析到 `upstream`（2026-11-25 实测：裸跑 `gh release list` 列出的是 erha19 官方的 release）。漏 `-R` 轻则验证对错仓库，重则把 release 建到官方仓库上去。本机已执行 `gh repo set-default QianLongGit/ping-island` 作第二道保险，但命令里仍要显式带 `-R`。
 
 **单 tag 策略**（2026-11-22 用户裁定：重复 tag 让旁观者困惑，只发一个）：
 
@@ -179,10 +181,10 @@ TAG="v$VER"                         # 唯一 tag：机器通道+人类入口合�
 EOF
 
 # ① 创建（--title 人类可读）
-gh release create "$TAG" --title "PingIsland $TAG" --notes-file ~/pi-release-notes.md
+gh release create "$TAG" -R QianLongGit/ping-island --title "PingIsland $TAG" --notes-file ~/pi-release-notes.md
 
 # ② 上传 6 资产（DMG + zip + 4 个 bridge zip）
-gh release upload "$TAG" --clobber \
+gh release upload "$TAG" -R QianLongGit/ping-island --clobber \
   ~/pi-release-assets/PingIsland-$VER-release-unsigned.dmg \
   ~/pi-release-assets/PingIsland-$VER-release-unsigned.zip \
   ~/pi-bridge-assets/PingIslandBridge-linux-musl-x86_64.zip \
@@ -191,7 +193,7 @@ gh release upload "$TAG" --clobber \
   ~/pi-bridge-assets/PingIslandBridge-linux-aarch64.zip
 ```
 
-验证点：`gh release view "$TAG" --json assets -q '.assets | length'` → **6**。
+验证点：`gh release view "$TAG" -R QianLongGit/ping-island --json assets -q '.assets | length'` → **6**。
 
 ## 第 5 步：验证（证据优先，三层）
 
@@ -199,7 +201,7 @@ gh release upload "$TAG" --clobber \
 VER=0.33.0; TAG_MAIN="v$VER"
 
 # ① 资产清单：6 资产
-gh release view "$TAG_MAIN" --json assets -q '.assets[].name'
+gh release view "$TAG_MAIN" -R QianLongGit/ping-island --json assets -q '.assets[].name'
 
 # ② 下载链端到端：curl 公网下载主路径资产 → sha256 与本地构建逐字节比对
 curl -sL -o ~/verify-bridge.zip \

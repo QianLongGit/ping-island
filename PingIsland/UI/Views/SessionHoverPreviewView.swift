@@ -173,8 +173,15 @@ struct SessionHoverDashboardView: View {
     var suppressInAppPromptControls = false
     var onQuestionInteractionStateChanged: (Bool) -> Void = { _ in }
 
+    // ── T29：预览行集 = 全量活动会话（取消 3 行上限） ──────────
+    // 高度由卡数估算/实测线性撑开、至 maximumOpenedHeight 封顶，
+    // 超出部分在本视图 body 的 ScrollView 内滚动。
+    static func displayedSessions(from sessions: [SessionState]) -> [SessionState] {
+        sessions
+    }
+
     private var displayedSessions: [SessionState] {
-        Array(sessions.prefix(3))
+        Self.displayedSessions(from: sessions)
     }
 
     var body: some View {

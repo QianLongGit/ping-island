@@ -701,6 +701,67 @@ func remoteAgentReplaysUnacknowledgedEventAfterReconnectAndServiceRestart() asyn
 }
 
 @Test
+func remoteAgentStampsOutboxReplayWithOriginalOccurrenceTime() async throws {
+    try await withTemporaryDirectory { directory in
+        let fixture = try RemoteServiceFixture(home: directory)
+        defer { fixture.stop() }
+        try await fixture.waitForSockets()
+        let requestID = UUID()
+        let enqueuedAt = Date()
+        _ = try TestSocketClient.send(envelope: BridgeEnvelope(
+            id: requestID, provider: .claude, eventType: "Stop", sessionKey: "claude:replay-stamp",
+            preview: "stamped remotely", cwd: "/work/project", status: SessionStatus(kind: .completed),
+            expectsResponse: false, metadata: ["session_id": "replay-stamp"]
+        ), socketPath: fixture.hookSocketPath)
+        try await waitUntil(description: "outbox should persist the stamped event") { [outboxURL = fixture.outboxURL] in
+            (try? Data(contentsOf: outboxURL).isEmpty) == false
+        }
+
+        // 入队与 attach 之间留出可分辨的间隔：戳必须来自入队时刻，
+        // 而不是 flush/发送时刻（flush 不得刷新戳）。
+        try await Task.sleep(for: .seconds(1.5))
+
+        let control = try RemoteTestControl(socketPath: fixture.controlSocketPath)
+        try await control.readHello()
+        let event = try await control.readHookEvent()
+        #expect(event.payload.requestID == requestID)
+        let stampedAt = try #require(event.payload.occurredAt)
+        #expect(abs(stampedAt.timeIntervalSince(enqueuedAt)) < 1)
+        control.closeConnection() // No ACK: the event stays durable.
+
+        // bridge 重启后从磁盘 outbox 重放：occurredAt 原样保留，
+        // 不得被加载/重发路径刷新。
+        try fixture.restart()
+        try await fixture.waitForSockets()
+        let replayControl = try RemoteTestControl(socketPath: fixture.controlSocketPath)
+        try await replayControl.readHello()
+        let replay = try await replayControl.readHookEvent()
+        #expect(replay.payload.requestID == requestID)
+        #expect(replay.payload.occurredAt == stampedAt)
+        try await replayControl.send(requestID: requestID)
+        try await waitUntil(description: "processed ACK should clear stamped replay") { [outboxURL = fixture.outboxURL] in
+            (try? Data(contentsOf: outboxURL).isEmpty) == true
+        }
+    }
+}
+
+@Test
+func remoteAgentHelloCarriesLocalClockReference() async throws {
+    try await withTemporaryDirectory { directory in
+        let fixture = try RemoteServiceFixture(home: directory)
+        defer { fixture.stop() }
+        try await fixture.waitForSockets()
+
+        // FIX1：hello 必须携带 bridge 本机时钟基准，且与测试进程的
+        // 本机 Date() 同机（差值秒级）——App 侧据此归一化 occurredAt。
+        let control = try RemoteTestControl(socketPath: fixture.controlSocketPath)
+        let hello = try await control.readHello()
+        let now = try #require(hello.now)
+        #expect(abs(now.timeIntervalSinceNow) < 10)
+    }
+}
+
+@Test
 func remoteAgentDeliversLargeFramesAndAcknowledgesOnlyProcessedEvents() async throws {
     try await withTemporaryDirectory { directory in
         let fixture = try RemoteServiceFixture(home: directory)
@@ -837,8 +898,15 @@ private final class RemoteTestControl {
     deinit { closeConnection() }
     func closeConnection() { if fd >= 0 { close(fd); fd = -1 } }
 
-    private struct Hello: Decodable { let type: String; let hostname: String }
-    func readHello() async throws { _ = try await next(Hello.self) }
+    struct Hello: Decodable {
+        let type: String
+        let hostname: String
+        // 远端时钟基准（Task 28 FIX1）：bridge 本机 Date()，App 侧
+        // 据此标定跨主机时钟偏移；旧 bridge 缺字段解码为 nil。
+        let now: Date?
+    }
+    @discardableResult
+    func readHello() async throws -> Hello { try await next(Hello.self) }
     func readHookEvent() async throws -> TestRemoteHookEventMessage { try await next(TestRemoteHookEventMessage.self) }
 
     private func next<T: Decodable>(_ type: T.Type) async throws -> T {
@@ -1000,6 +1068,9 @@ private struct TestRemoteHookEventPayload: Decodable {
     let permissionMode: String?
     let message: String?
     let approvalsReviewer: String?
+    // 远程事件发生时间（Task 28）：bridge 在事件进入转发管线时打戳，
+    // outbox 持久化与重放不刷新；旧 bridge 缺字段解码为 nil。
+    let occurredAt: Date?
     let clientInfo: TestRemoteHookClientInfoPayload
 }
 

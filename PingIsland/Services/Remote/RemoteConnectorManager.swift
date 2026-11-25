@@ -766,6 +766,14 @@ final class RemoteConnectorManager: ObservableObject {
             if var currentEndpoint = endpoint(for: endpointID) {
                 currentEndpoint.agentVersion = hello.version
                 currentEndpoint.lastConnectedAt = Date()
+                // ─────────────────────────────────────────────────
+                // 跨主机时钟偏移标定（Task 28 FIX1）：App 时钟 = 远端
+                // 时钟 + offset。occurredAt 由远端时钟产出，入站时据此
+                // 归一化到 App 时钟，闸门内保持同机时钟比较。旧 bridge
+                // 无 hello.now → 偏移 0，行为与现状完全一致；每次握手
+                // 重新标定，覆盖长时间连接后的时钟漂移。
+                // ─────────────────────────────────────────────────
+                currentEndpoint.remoteClockOffset = Self.clockOffset(helloNow: hello.now)
                 updateEndpoint(currentEndpoint)
             }
             setState(for: endpointID, phase: .connected, detail: "远程转发已连接", agentVersion: hello.version)
@@ -892,7 +900,13 @@ final class RemoteConnectorManager: ObservableObject {
                 ),
                 // 远程会话标题（Task 11）：wire 顶层字段透传至事件，
                 // 由 SessionStore 注入 conversationInfo.summary
-                conversationTitle: payload.conversationTitle
+                conversationTitle: payload.conversationTitle,
+                // 事件发生时间（Task 28 FIX1）：入站即归一化到 App 时钟
+                // （远端时钟产出 + 握手标定的偏移），SessionState 记录的
+                // 始终是 App 时钟时刻，闸门内保持同机比较
+                occurredAt: payload.occurredAt.map {
+                    Self.normalizedOccurredAt($0, offset: endpoint(for: endpointID)?.remoteClockOffset ?? 0)
+                }
             )
 
             if event.shouldFilterBeforeApprovalHandling {
@@ -944,6 +958,22 @@ final class RemoteConnectorManager: ObservableObject {
     /// A processed-event ACK means ingestion completed, not merely that a Task
     /// was scheduled. Unknown/filtered events are acknowledged too so they do
     /// not poison the durable replay queue. Missing handlers remain retryable.
+    // ═════════════════════════════════════════════════════
+    // 跨主机时钟偏移（Task 28 FIX1）：纯函数，便于单测。
+    // 语义：App 时钟 = 远端时钟 + offset。hello.now 由远端时钟产
+    // 出，App 收到时刻与本机时钟之差即偏移（含传输延迟，秒级，
+    // 远小于 120 秒阈值，不引入误判）。
+    // ═════════════════════════════════════════════════════
+    nonisolated static func clockOffset(helloNow: Date?, receivedAt: Date = Date()) -> TimeInterval {
+        guard let helloNow else { return 0 }
+        return receivedAt.timeIntervalSince(helloNow)
+    }
+
+    /// 把远端时钟产出的发生时间归一化到 App 时钟。
+    nonisolated static func normalizedOccurredAt(_ occurredAt: Date, offset: TimeInterval) -> Date {
+        occurredAt.addingTimeInterval(offset)
+    }
+
     static func deliverRemoteHookEvent(
         _ event: HookEvent?,
         onEvent: (@Sendable (HookEvent) async -> Void)?,

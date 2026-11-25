@@ -70,7 +70,16 @@ struct SessionSoundEdgeTracker {
     }
 
     /// Record `sessions` and return the single sound edge they crossed, if any.
-    mutating func edge(for sessions: [SessionState]) -> Edge? {
+    ///
+    /// ══════════════════════════════════════════════════════════════════
+    /// 远程回放新鲜度闸门（Task 28）：边沿只统计"新鲜"的会话——
+    /// `lastEventOccurredAt` 滞后超过阈值的远程会话（离线 outbox 回放）
+    /// 不进入任何边沿桶，由纯过期事件引起的状态跃变整体静默。
+    /// `absorb` 无条件执行：过期会话的 completionKey 照常登记，
+    /// 后续同一完成键的重放不会重复响。occurredAt 缺席（本地事件/
+    /// 旧 bridge）恒为新鲜，实时提示分毫不变。
+    /// ══════════════════════════════════════════════════════════════════
+    mutating func edge(for sessions: [SessionState], now: Date = Date()) -> Edge? {
         guard hasPrimed else {
             prime(with: sessions)
             return nil
@@ -82,10 +91,11 @@ struct SessionSoundEdgeTracker {
         var completedSessions: [SessionState] = []
         var processingSessions: [SessionState] = []
         let connectedSessions = sessions.filter { $0.connectionState == .connected }
-        let newSessions = connectedSessions.filter { records[$0.stableId] == nil }
-        let rapidSubmitSessions = rapidSubmitTracker.observe(connectedSessions)
+        let notificationFresh = connectedSessions.filter { $0.hasFreshNotificationActivity(now: now) }
+        let newSessions = notificationFresh.filter { records[$0.stableId] == nil }
+        let rapidSubmitSessions = rapidSubmitTracker.observe(notificationFresh)
 
-        for session in connectedSessions {
+        for session in notificationFresh {
             let previous = records[session.stableId]?.snapshot
             let current = Snapshot(session)
 
