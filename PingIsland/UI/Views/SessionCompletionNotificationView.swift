@@ -51,6 +51,9 @@ nonisolated struct SessionCompletionNotification: Equatable, Identifiable {
     let session: SessionState
     let kind: Kind
     let queuedAt: Date
+    /// 随本卡播报的其它会话完成数（Task 31 · F3）：被最小间隔抑制或
+    /// 同批合并的完成不单独出卡，计数并入下一张真正弹出的卡片。
+    let suppressedSessionCount: Int
     let identity: Identity
 
     enum Identity: Hashable {
@@ -63,12 +66,14 @@ nonisolated struct SessionCompletionNotification: Equatable, Identifiable {
         id: UUID = UUID(),
         session: SessionState,
         kind: Kind,
-        queuedAt: Date = Date()
+        queuedAt: Date = Date(),
+        suppressedSessionCount: Int = 0
     ) {
         self.id = id
         self.session = session
         self.kind = kind
         self.queuedAt = queuedAt
+        self.suppressedSessionCount = suppressedSessionCount
         if kind == .completed, let key = SessionCompletionKey.make(for: session) {
             self.identity = .completed(key)
         } else if kind == .compacted {
@@ -85,6 +90,17 @@ nonisolated struct SessionCompletionNotification: Equatable, Identifiable {
                 turnId: session.latestTurnId
             )
         }
+    }
+
+    /// 返回携带累计播报数的同身份副本（id / identity 不变）
+    nonisolated func announcingSuppressedSessions(_ count: Int) -> SessionCompletionNotification {
+        SessionCompletionNotification(
+            id: id,
+            session: session,
+            kind: kind,
+            queuedAt: queuedAt,
+            suppressedSessionCount: count
+        )
     }
 }
 
@@ -209,6 +225,29 @@ final class SessionCompletionNotificationRegistry {
     private var consumedIdentities = Set<SessionCompletionNotification.Identity>()
     private var pending: [SessionCompletionNotification] = []
 
+    // ─────────────────────────────────────────────────
+    // 节流状态（Task 31 · F3）
+    //
+    // 入队 / 出队准入只看卡片自己的完成时刻与「上一张已弹出卡片」
+    // 的出队时刻；控制器照旧 enqueue → dequeueNext，无需知情。
+    // ─────────────────────────────────────────────────
+    /// 上一张实际弹出（出队）的完成卡时刻
+    private var lastPresentedAt: Date?
+    /// 被最小间隔 / 同批合并抑制、等待随下一张卡片播报的会话数
+    private(set) var suppressedSessionCount = 0
+    private let trace: (String) -> Void
+    /// 节流开关：关闭即沿用 Task 31 之前的入队 / 出队语义。回放与
+    /// 过期闸门在策略层，不受它影响。
+    private let isPacingEnabled: Bool
+
+    init(
+        pacingEnabled: Bool = NotificationPacing.isPacingEnabledByDefault,
+        trace: @escaping (String) -> Void = { NotifyTrace.emit($0) }
+    ) {
+        self.isPacingEnabled = pacingEnabled
+        self.trace = trace
+    }
+
     var pendingNotifications: [SessionCompletionNotification] { pending }
 
     func isConsumed(session: SessionState) -> Bool {
@@ -229,18 +268,76 @@ final class SessionCompletionNotificationRegistry {
         consumedIdentities.insert(notification.identity)
     }
 
-    func enqueue(_ notification: SessionCompletionNotification) {
+    /// 入队准入（F3.1 TTL + F3.2 最小间隔）。被最小间隔抑制的完成
+    /// 不出卡，但计入 suppressedSessionCount，随下一张卡片播报。
+    func enqueue(_ notification: SessionCompletionNotification, now: Date = Date()) {
         guard !isConsumed(notification),
               !pending.contains(where: { $0.identity == notification.identity }) else { return }
+
+        let decision: NotifyDecision = isPacingEnabled
+            ? NotificationPacing.completionCardAdmission(
+                completionOccurredAt: notification.session.lastEventOccurredAt,
+                queuedAt: notification.queuedAt,
+                lastPresentedAt: lastPresentedAt,
+                now: now
+            )
+            : .notify
+        trace(decisionLine(notification, decision, now: now))
+        guard decision == .notify else {
+            if decision == .suppress(.minInterval) {
+                suppressedSessionCount += 1
+            }
+            return
+        }
         pending.append(notification)
     }
 
-    func dequeueNext() -> SessionCompletionNotification? {
+    /// 出队（F3.1 排队期间过期的卡片出列 + F3.3 同批合并）。
+    func dequeueNext(now: Date = Date()) -> SessionCompletionNotification? {
         pending.removeAll(where: isConsumed)
-        guard !pending.isEmpty else { return nil }
-        let next = pending.removeFirst()
-        markConsumed(next)
-        return next
+        guard isPacingEnabled else {
+            // 节流关闭：逐张出队，不过期、不合并
+            guard !pending.isEmpty else { return nil }
+            let next = pending.removeFirst()
+            markConsumed(next)
+            return next
+        }
+
+        // 排队期间过期：被审批 / 隐藏窗口挡住后积压的旧完成，
+        // 解挡时不得再逐张倾泻。
+        var retained: [SessionCompletionNotification] = []
+        for notification in pending {
+            if NotificationPacing.isCompletionCardExpired(
+                completionOccurredAt: notification.session.lastEventOccurredAt,
+                queuedAt: notification.queuedAt,
+                now: now
+            ) {
+                trace(decisionLine(notification, .suppress(.ttlExpired), now: now))
+            } else {
+                retained.append(notification)
+            }
+        }
+        pending = retained
+        guard var head = pending.first else { return nil }
+
+        let batch = pending
+        pending.removeAll()
+        if NotificationPacing.mergesCompletionCardBatch(pendingCount: batch.count) {
+            // 同一批 ≥ 阈值：只出首张，其余合并进它的计数
+            suppressedSessionCount += batch.count - 1
+            for merged in batch.dropFirst() {
+                markConsumed(merged)
+                trace(decisionLine(merged, .suppress(.batchMerge), now: now))
+            }
+        } else {
+            pending.append(contentsOf: batch.dropFirst())
+        }
+        head = head.announcingSuppressedSessions(suppressedSessionCount)
+        suppressedSessionCount = 0
+        markConsumed(head)
+        lastPresentedAt = now
+        trace(decisionLine(head, .notify, now: now))
+        return head
     }
 
     func removePending(matching predicate: (SessionCompletionNotification.Kind) -> Bool) {
@@ -249,6 +346,25 @@ final class SessionCompletionNotificationRegistry {
         for notification in removed {
             markConsumed(notification)
         }
+    }
+
+    // ─────────────────────────────────────────────────
+    // 决策日志行（Task 31 · F6）
+    // ─────────────────────────────────────────────────
+    private func decisionLine(
+        _ notification: SessionCompletionNotification,
+        _ decision: NotifyDecision,
+        now: Date
+    ) -> String {
+        NotificationPacing.decisionLine(
+            surface: .card,
+            sessionID: notification.session.sessionId,
+            kind: notification.kind.rawValue,
+            decision: decision,
+            occurredAt: notification.session.lastEventOccurredAt,
+            now: now,
+            suppressedCount: suppressedSessionCount
+        )
     }
 }
 
@@ -288,7 +404,8 @@ enum SessionCompletionNotificationPolicy {
         previousPhase: SessionPhase?,
         previousCompletionKey: SessionCompletionKey? = nil,
         isEnabled: Bool,
-        now: Date = Date()
+        now: Date = Date(),
+        onFreshnessSuppress: ((NotifySuppressReason) -> Void)? = nil
     ) -> Bool {
         guard isEnabled else { return false }
         guard SessionCompletionStateEvaluator.isCompletedReadySession(session) else { return false }
@@ -303,24 +420,31 @@ enum SessionCompletionNotificationPolicy {
             } else if !isCodexCompletionSourcePhase(previousPhase) {
                 return false
             }
-            return wasTrackedOrRecentlyCreated(session, previousPhase: previousPhase, now: now)
+            return wasTrackedOrRecentlyCreated(
+                session, kind: .completed, previousPhase: previousPhase, now: now, onSuppress: onFreshnessSuppress
+            )
         }
 
         // A question can be resolved without changing waitingForInput; the
         // completion identity, not the phase alone, deduplicates that transition.
-        return wasTrackedOrRecentlyCreated(session, previousPhase: previousPhase, now: now)
+        return wasTrackedOrRecentlyCreated(
+            session, kind: .completed, previousPhase: previousPhase, now: now, onSuppress: onFreshnessSuppress
+        )
     }
 
     static func shouldQueueEndedNotification(
         for session: SessionState,
         previousPhase: SessionPhase?,
         isEnabled: Bool,
-        now: Date = Date()
+        now: Date = Date(),
+        onFreshnessSuppress: ((NotifySuppressReason) -> Void)? = nil
     ) -> Bool {
         guard isEnabled else { return false }
         guard session.phase == .ended else { return false }
         guard previousPhase != .ended else { return false }
-        guard wasTrackedOrRecentlyCreated(session, previousPhase: previousPhase, now: now) else {
+        guard wasTrackedOrRecentlyCreated(
+            session, kind: .ended, previousPhase: previousPhase, now: now, onSuppress: onFreshnessSuppress
+        ) else {
             return false
         }
         if previousPhase == .waitingForInput {
@@ -333,29 +457,67 @@ enum SessionCompletionNotificationPolicy {
         for session: SessionState,
         previousPhase: SessionPhase?,
         isEnabled: Bool,
-        now: Date = Date()
+        now: Date = Date(),
+        onFreshnessSuppress: ((NotifySuppressReason) -> Void)? = nil
     ) -> Bool {
         guard isEnabled else { return false }
         guard previousPhase == .compacting else { return false }
         guard session.phase != .compacting else { return false }
-        return wasTrackedOrRecentlyCreated(session, previousPhase: previousPhase, now: now)
+        return wasTrackedOrRecentlyCreated(
+            session, kind: .compacted, previousPhase: previousPhase, now: now, onSuppress: onFreshnessSuppress
+        )
     }
 
     static func hasRecentNotificationActivity(
         _ session: SessionState,
-        now: Date = Date()
+        kind: SessionCompletionNotification.Kind = .completed,
+        now: Date = Date(),
+        onSuppress: ((NotifySuppressReason) -> Void)? = nil
     ) -> Bool {
-        // ═════════════════════════════════════════════════════
-        // 远程回放新鲜度闸门（Task 28）：outbox 回放会把接收时间
-        // 刷成 now、击穿下面的 60 秒 recency 窗口；这里按事件的
-        // 真实发生时间（lastEventOccurredAt）先行拦截——过期事件
-        // 的完成/结束/压缩卡一律不入队。缺席（本地/旧 bridge）恒
-        // 新鲜，叠加在现有窗口之外、不替换现有逻辑。
-        // ═════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════
+        // 提示类副作用的闸门，两层叠加、只压提示不改状态：
+        //   1. 回放（Task 31 · F8）：事件在本次握手之前就已发生——
+        //      哪怕滞后不足 120 秒（批次尾部的「新鲜尾巴」）也不入队
+        //   2. 过期（Task 28）：会话级最新事件滞后超过阈值
+        // 两者都缺席（本地事件 / 实时远程事件）→ 落到下面的 recency 窗口
+        // ═══════════════════════════════════════════════════
+        if session.lastEventIsReplay {
+            reportSuppression(.replay, session: session, kind: kind, now: now, onSuppress: onSuppress)
+            return false
+        }
         guard session.hasFreshNotificationActivity(now: now) else {
+            reportSuppression(.staleEvent, session: session, kind: kind, now: now, onSuppress: onSuppress)
             return false
         }
         return now.timeIntervalSince(session.lastActivity) <= notificationRecencyWindow
+    }
+
+    /// 决策日志（Task 31 · F6）。控制器每个快照都会重新评估同一会话，
+    /// 同一次完成的同一原因只落一行，避免一次洪峰写成上万行。
+    private static func reportSuppression(
+        _ reason: NotifySuppressReason,
+        session: SessionState,
+        kind: SessionCompletionNotification.Kind,
+        now: Date,
+        onSuppress: ((NotifySuppressReason) -> Void)?
+    ) {
+        onSuppress?(reason)
+        NotifyTrace.emitOnce(
+            key: [
+                session.stableId, kind.rawValue, reason.rawValue,
+                String(session.completionSequence), session.latestTurnId ?? "-",
+                String(session.compactionSequence)
+            ].joined(separator: "|"),
+            NotificationPacing.decisionLine(
+                surface: .card,
+                sessionID: session.sessionId,
+                kind: kind.rawValue,
+                decision: .suppress(reason),
+                occurredAt: session.lastEventOccurredAt,
+                now: now,
+                suppressedCount: 0
+            )
+        )
     }
 
     private static func isCodexCompletionSourcePhase(_ phase: SessionPhase) -> Bool {
@@ -369,10 +531,14 @@ enum SessionCompletionNotificationPolicy {
 
     private static func wasTrackedOrRecentlyCreated(
         _ session: SessionState,
+        kind: SessionCompletionNotification.Kind,
         previousPhase: SessionPhase?,
-        now: Date
+        now: Date,
+        onSuppress: ((NotifySuppressReason) -> Void)?
     ) -> Bool {
-        guard hasRecentNotificationActivity(session, now: now) else {
+        guard hasRecentNotificationActivity(
+            session, kind: kind, now: now, onSuppress: onSuppress
+        ) else {
             return false
         }
 
@@ -647,6 +813,16 @@ struct SessionCompletionNotificationView: View {
             }
             .padding(.horizontal, Self.metricsSectionHorizontalPadding(compactList: settings.compactSessionList))
             .padding(.vertical, Self.metricsSectionVerticalPadding(compactList: settings.compactSessionList))
+
+            // ── Task 31 · F3：被抑制 / 合并的其它会话完成，随本卡播报 ──
+            if notification.suppressedSessionCount > 0 {
+                Text(AppLocalization.format("另有 %ld 个会话完成", notification.suppressedSessionCount))
+                    .font(.system(size: bodyFontSize, weight: .medium))
+                    .foregroundColor(.white.opacity(0.56))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Self.metricsSectionHorizontalPadding(compactList: settings.compactSessionList))
+                    .padding(.bottom, Self.metricsSectionVerticalPadding(compactList: settings.compactSessionList))
+            }
 
             Rectangle()
                 .fill(Color.white.opacity(0.05))

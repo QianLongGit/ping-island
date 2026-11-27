@@ -171,6 +171,14 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
     // ─────────────────────────────────────────────────────
     var remoteClockOffset: TimeInterval = 0
 
+    // ─────────────────────────────────────────────────────
+    // 对端 bridge 是否支持事件时间戳（Task 31 · F2）：握手时按
+    // hello.now 是否存在记录。为 true 时到达的无戳 hook 事件只能
+    // 出自旧 bridge 写下的 outbox 积压。默认 false，旧持久化文件
+    // 缺字段解码为 false（旧 bridge 语义，行为不变）。
+    // ─────────────────────────────────────────────────────
+    var supportsEventTimestamps: Bool = false
+
     init(
         id: UUID = UUID(),
         displayName: String,
@@ -187,7 +195,8 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
         agentVersion: String? = nil,
         lastConnectedAt: Date? = nil,
         lastBootstrapAt: Date? = nil,
-        remoteClockOffset: TimeInterval = 0
+        remoteClockOffset: TimeInterval = 0,
+        supportsEventTimestamps: Bool = false
     ) {
         let parsedLink = RemoteSSHLink(sshTarget: sshTarget)
         let effectivePort = sshPort == RemoteSSHLink.defaultPort
@@ -210,6 +219,7 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
         self.lastConnectedAt = lastConnectedAt
         self.lastBootstrapAt = lastBootstrapAt
         self.remoteClockOffset = remoteClockOffset
+        self.supportsEventTimestamps = supportsEventTimestamps
     }
 
     var resolvedTitle: String {
@@ -271,6 +281,7 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
         case lastConnectedAt
         case lastBootstrapAt
         case remoteClockOffset
+        case supportsEventTimestamps
     }
 
     init(from decoder: Decoder) throws {
@@ -295,6 +306,7 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
         lastConnectedAt = try container.decodeIfPresent(Date.self, forKey: .lastConnectedAt)
         lastBootstrapAt = try container.decodeIfPresent(Date.self, forKey: .lastBootstrapAt)
         remoteClockOffset = try container.decodeIfPresent(TimeInterval.self, forKey: .remoteClockOffset) ?? 0
+        supportsEventTimestamps = try container.decodeIfPresent(Bool.self, forKey: .supportsEventTimestamps) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -315,6 +327,7 @@ struct RemoteEndpoint: Identifiable, Codable, Equatable, Sendable {
         try container.encodeIfPresent(lastConnectedAt, forKey: .lastConnectedAt)
         try container.encodeIfPresent(lastBootstrapAt, forKey: .lastBootstrapAt)
         try container.encode(remoteClockOffset, forKey: .remoteClockOffset)
+        try container.encode(supportsEventTimestamps, forKey: .supportsEventTimestamps)
     }
 }
 

@@ -41,9 +41,22 @@ final class DetachedIslandPetHoverTriggerTests: XCTestCase {
 
     // ── 驻留延迟常量 ───────────────────────────────────────────────
 
-    func testPetHoverActivationDelayAlignsDockedHoverDwell() {
-        // 对齐 docked 非全屏 hover 驻留延迟（NotchViewModel.hoverActivationDelay 0.24s）
-        XCTAssertEqual(DetachedIslandPanelMetrics.petHoverActivationDelay, 0.24)
+    // 旧语义「对齐 docked 非全屏 hover 驻留 0.24s」在 T30 被有意改掉：
+    // 悬停预览面板最高 480–700pt，0.24s 下指针路过宠物就会弹出并压住
+    // 工作区；改为 0.6s，只有真的停在宠物上才弹（detached 不再与 docked 对齐）。
+    func testPetHoverActivationDelayRequiresDeliberateDwell() {
+        XCTAssertEqual(DetachedIslandPanelMetrics.petHoverActivationDelay, 0.6)
+    }
+
+    // ── 悬停触发区 = 宠物可见形象 ─────────────────────────────────
+
+    func testHoverTriggerIgnoresInvisibleHitFrameDeadZone() {
+        let metrics = DetachedIslandPetMetrics(scale: 1)
+        let inset = (metrics.petHitFrame - metrics.petVisualFrame) / 2
+
+        XCTAssertTrue(metrics.isInsideVisibleFrame(CGPoint(x: inset + 0.5, y: 46)))
+        XCTAssertFalse(metrics.isInsideVisibleFrame(CGPoint(x: inset - 0.5, y: 46)))
+        XCTAssertFalse(metrics.isInsideVisibleFrame(CGPoint(x: 46, y: metrics.petHitFrame - inset + 0.5)))
     }
 
     // ── 预览密度接入紧凑列表设置 ───────────────────────────────────

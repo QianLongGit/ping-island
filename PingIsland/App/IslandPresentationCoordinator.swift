@@ -223,7 +223,11 @@ final class IslandPresentationCoordinator {
             },
             onPetAnchorChanged: { [weak self] petAnchor in
                 self?.persistFloatingPetAnchor(petAnchor)
-            }
+            },
+            // ── T30：指针位置来源 ──────────────────────────────────
+            // 复用项目既有的全局鼠标位置流（与 docked notch 同一范式）：
+            // 悬浮胶囊据此决定「这一刻该接受鼠标还是该穿透」。
+            pointerLocationPublisher: EventMonitors.shared.mouseRoutingLocation.eraseToAnyPublisher()
         )
         detachedWindowController.onRedockRequested = { [weak self] in
             self?.redockDetached()

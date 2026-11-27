@@ -181,6 +181,8 @@ final class SessionStoreCompletionSequenceTests: XCTestCase {
         var firstSequence: UInt64?
         let now = Date()
         for (index, phase) in [SessionPhase.processing, .idle, .processing, .idle, .processing, .idle].enumerated() {
+            // Task 31：声音冷却（2s）与卡片最小间隔（60s）按显式时钟推进
+            let tick = now.addingTimeInterval(Double(index) * 120)
             let turnID = index < 4 ? "turn-1" : "turn-2"
             await store.syncCodexThreadSnapshot(CodexThreadSnapshot(
                 threadId: id, name: "Replay", preview: "Done", cwd: "/tmp/\(id)",
@@ -196,17 +198,20 @@ final class SessionStoreCompletionSequenceTests: XCTestCase {
             ))
             let current = await store.session(for: id)
             let session = try XCTUnwrap(current)
-            let sound = sounds.edge(for: [session])
+            let sound = sounds.edge(for: [session], now: tick)
             guard phase == .idle else { continue }
             let key = try XCTUnwrap(SessionCompletionKey.make(for: session))
-            registry.enqueue(SessionCompletionNotification(session: session, kind: .completed))
+            registry.enqueue(
+                SessionCompletionNotification(session: session, kind: .completed, queuedAt: tick),
+                now: tick
+            )
             if index == 3 {
                 XCTAssertGreaterThan(session.completionSequence, try XCTUnwrap(firstSequence))
                 XCTAssertEqual(key, firstKey)
-                XCTAssertNil(registry.dequeueNext())
+                XCTAssertNil(registry.dequeueNext(now: tick))
                 XCTAssertNotEqual(sound?.event, .taskCompleted)
             } else {
-                XCTAssertNotNil(registry.dequeueNext())
+                XCTAssertNotNil(registry.dequeueNext(now: tick))
                 XCTAssertEqual(sound?.event, .taskCompleted)
                 if index == 1 {
                     firstKey = key

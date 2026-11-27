@@ -525,6 +525,14 @@ actor SessionStore {
             applyHookWorkspace(event.cwd, to: &session)
         }
 
+        // ─────────────────────────────────────────────────
+        // 回放标记（Task 31 · F8）：随事件记录，供提示类副作用
+        // （完成卡 / 边沿声音）的闸门使用。放在并发合并之后写入——
+        // await 期间若被同会话的其它事件抢先，上面的副本会被替换，
+        // 这里赋值保证落在最终提交的状态上。状态更新不受影响。
+        // ─────────────────────────────────────────────────
+        session.lastEventIsReplay = event.isReplay
+
         let wasCompletedReady = SessionCompletionStateEvaluator.isCompletedReadySession(session)
         let previousLastActivity = session.lastActivity
         let phaseBeforeHook = session.phase

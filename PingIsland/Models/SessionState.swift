@@ -136,6 +136,15 @@ struct SessionState: Equatable, Identifiable, Sendable {
     // ═════════════════════════════════════════════════════
     var lastEventOccurredAt: Date?
 
+    // ─────────────────────────────────────────────────
+    // 回放标记（Task 31 · F8）：最近一条事件在本次远程握手之前就已
+    // 发生（outbox 积压），或对端支持时间戳却未带戳。回放事件照常
+    // 更新状态（相位 / 标题 / 徽标 / 列表行），但不得产生任何提示类
+    // 副作用——完成卡、完成声音、重连 churn 的边沿声。本地事件恒为
+    // false，既有提示行为不变。
+    // ─────────────────────────────────────────────────
+    var lastEventIsReplay: Bool
+
     // MARK: - Identifiable
 
     var id: String { sessionId }
@@ -185,6 +194,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         lastActivity: Date = Date(),
         createdAt: Date = Date(),
         lastEventOccurredAt: Date? = nil,
+        lastEventIsReplay: Bool = false,
         lifecycleIncarnationID: UUID = UUID()
     ) {
         self.sessionId = sessionId
@@ -227,6 +237,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.lastActivity = lastActivity
         self.createdAt = createdAt
         self.lastEventOccurredAt = lastEventOccurredAt
+        self.lastEventIsReplay = lastEventIsReplay
     }
 
     // MARK: - Derived Properties

@@ -1564,11 +1564,15 @@ struct NotchView: View {
 
     private func handleOpenActiveSessionShortcut() {
         guard let session = preferredShortcutSession else { return }
+        // ── T30 激活溯源：显式激活调用点打来源标记 ──────────────────
+        FocusTrace.source("notch.shortcut.openActiveSession")
         NSApp.activate(ignoringOtherApps: true)
         viewModel.toggleChat(for: session, reason: .click)
     }
 
     private func handleOpenSessionListShortcut() {
+        // ── T30 激活溯源：显式激活调用点打来源标记 ──────────────────
+        FocusTrace.source("notch.shortcut.openSessionList")
         NSApp.activate(ignoringOtherApps: true)
         viewModel.toggleSessionList(reason: .click)
     }

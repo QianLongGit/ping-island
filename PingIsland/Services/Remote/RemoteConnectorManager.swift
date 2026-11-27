@@ -774,6 +774,10 @@ final class RemoteConnectorManager: ObservableObject {
                 // 重新标定，覆盖长时间连接后的时钟漂移。
                 // ─────────────────────────────────────────────────
                 currentEndpoint.remoteClockOffset = Self.clockOffset(helloNow: hello.now)
+                // 无戳回放识别（Task 31 · F2）：hello.now 存在即说明对端
+                // bridge 支持事件时间戳；此后到达的无戳事件只能出自旧
+                // bridge 写下的 outbox 积压（App 升级后的首连必现一次）。
+                currentEndpoint.supportsEventTimestamps = Self.supportsEventTimestamps(helloNow: hello.now)
                 updateEndpoint(currentEndpoint)
             }
             setState(for: endpointID, phase: .connected, detail: "远程转发已连接", agentVersion: hello.version)
@@ -879,6 +883,12 @@ final class RemoteConnectorManager: ObservableObject {
                 processName: payload.clientInfo.processName
             )
 
+            // 事件发生时间（Task 28 FIX1）与回放判定（Task 31 · F8）共用
+            // 同一份已归一化到 App 时钟的发生时间。
+            let replayContext = Self.replayContext(
+                payload: payload,
+                endpoint: endpoint(for: endpointID)
+            )
             let event = HookEvent(
                 sessionId: payload.sessionID,
                 cwd: payload.cwd,
@@ -904,9 +914,9 @@ final class RemoteConnectorManager: ObservableObject {
                 // 事件发生时间（Task 28 FIX1）：入站即归一化到 App 时钟
                 // （远端时钟产出 + 握手标定的偏移），SessionState 记录的
                 // 始终是 App 时钟时刻，闸门内保持同机比较
-                occurredAt: payload.occurredAt.map {
-                    Self.normalizedOccurredAt($0, offset: endpoint(for: endpointID)?.remoteClockOffset ?? 0)
-                }
+                occurredAt: replayContext.occurredAt,
+                // 回放判定（Task 31 · F8 / F2）：只更新状态，不产生提示
+                isReplay: replayContext.isReplay
             )
 
             if event.shouldFilterBeforeApprovalHandling {
@@ -972,6 +982,42 @@ final class RemoteConnectorManager: ObservableObject {
     /// 把远端时钟产出的发生时间归一化到 App 时钟。
     nonisolated static func normalizedOccurredAt(_ occurredAt: Date, offset: TimeInterval) -> Date {
         occurredAt.addingTimeInterval(offset)
+    }
+
+    // ═════════════════════════════════════════════════════════
+    // 对端时间戳能力（Task 31 · F2）：纯函数，便于单测。
+    //
+    // 新 bridge 冲刷旧 bridge 写下的 outbox 时，积压行没有 occurredAt。
+    // hello.now 存在 ⇒ 对端支持时间戳 ⇒ 其无戳事件必为积压；旧 bridge
+    // （无 hello.now）保持兼容。不改 bridge 协议，全在 App 侧推断。
+    // ═════════════════════════════════════════════════════════
+    nonisolated static func supportsEventTimestamps(helloNow: Date?) -> Bool {
+        helloNow != nil
+    }
+
+    // ═════════════════════════════════════════════════════════
+    // 回放判定（Task 31 · F8）：纯函数，便于单测。
+    //
+    // 以握手为界：bridge 先发 hello 再冲刷 outbox，积压事件的
+    // occurredAt（归一化到 App 时钟后）必然早于端点的 lastConnectedAt
+    // （hello 时刻）；握手之后发生的实时事件不早于它。留 2 秒容差吸收
+    // 毫秒级竞态。无戳事件交给 F2 的能力位推断。判定只压提示，不改状态。
+    // ═════════════════════════════════════════════════════════
+    nonisolated static func replayContext(
+        payload: RemoteHookEventPayload,
+        endpoint: RemoteEndpoint?
+    ) -> (occurredAt: Date?, isReplay: Bool) {
+        let occurredAt = payload.occurredAt.map {
+            normalizedOccurredAt($0, offset: endpoint?.remoteClockOffset ?? 0)
+        }
+        return (
+            occurredAt,
+            NotificationPacing.isReplayedBeforeAttach(
+                occurredAt: occurredAt,
+                supportsEventTimestamps: endpoint?.supportsEventTimestamps ?? false,
+                connectedAt: endpoint?.lastConnectedAt
+            )
+        )
     }
 
     static func deliverRemoteHookEvent(

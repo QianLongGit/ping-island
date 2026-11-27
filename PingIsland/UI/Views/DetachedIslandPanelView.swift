@@ -29,6 +29,20 @@ struct DetachedIslandPetMetrics: Equatable {
     func activeCountFontSize(for count: Int) -> CGFloat {
         (count >= 10 ? 8.2 : 9.2) * scale
     }
+
+    /// 指针（命中框局部坐标，原点左上）是否落在可见形象内
+    ///
+    /// 可见形象居中于命中框，四周各留 (92−74)/2×scale 的不可见死区；
+    /// 悬停触发只认可见形象，死区不算停在宠物上。
+    func isInsideVisibleFrame(_ point: CGPoint) -> Bool {
+        let inset = (petHitFrame - petVisualFrame) / 2
+        return CGRect(
+            x: inset,
+            y: inset,
+            width: petVisualFrame,
+            height: petVisualFrame
+        ).contains(point)
+    }
 }
 
 enum DetachedIslandPanelMetrics {
@@ -50,9 +64,11 @@ enum DetachedIslandPanelMetrics {
     static let completionBubbleMinimumHeight: CGFloat = 120
     static let completionBubbleFallbackHeight: CGFloat = 180
 
-    /// 宠物悬停弹出预览的驻留延迟：对齐 docked 非全屏 hover 驻留
-    /// （NotchViewModel.hoverActivationDelay 0.24s），两侧手感一致
-    static let petHoverActivationDelay: TimeInterval = 0.24
+    /// 宠物悬停弹出预览的驻留延迟（T30：0.24s → 0.6s）
+    ///
+    /// 悬停预览面板最高可达 480–700pt，0.24s 下指针路过宠物就会弹出并
+    /// 压住工作区；收紧到 0.6s，只有真的停在宠物上才弹。
+    static let petHoverActivationDelay: TimeInterval = 0.6
 
     @MainActor
     static func petMetrics() -> DetachedIslandPetMetrics {
@@ -761,7 +777,18 @@ struct DetachedIslandPanelView: View {
             }
 
             petButton
-                .onHover(perform: onPetHoverChanged)
+                // ── T30：悬停触发区收窄到宠物可见形象（74×scale）──────────
+                // onContinuousHover 带局部坐标：命中框（92×scale）内的移动
+                // 按可见形象几何判定，指针停在四周不可见死区不触发预览。
+                // 点击、拖拽仍用 92 命中框，行为不变。
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        onPetHoverChanged(petMetrics.isInsideVisibleFrame(location))
+                    case .ended:
+                        onPetHoverChanged(false)
+                    }
+                }
                 .frame(width: layout.petFrame.width, height: layout.petFrame.height)
                 .offset(x: layout.petFrame.minX, y: layout.petFrame.minY)
         }

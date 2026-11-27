@@ -187,11 +187,37 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     private var isWindowSizeUpdateScheduled = false
     private var isApplyingWindowSizeUpdate = false
     private var hasPendingWindowSizeUpdate = false
-    private var interactionActivationWorkItem: DispatchWorkItem?
+    private var interactionActivationToken: DetachedIslandDelayedWorkToken?
     private var bubbleVisibilityWorkItem: DispatchWorkItem?
     private var bubbleHoverGraceWorkItem: DispatchWorkItem?
-    private var petHoverActivationWorkItem: DispatchWorkItem?
     private var isPetHovered = false
+
+    // ══════════════════════════════════════════════════════════════
+    // MARK: - T30 鼠标路由与悬停时序
+    //
+    // 自动弹出的面板不得拦鼠标：面板出现时对指针透明，指针在面板内
+    // 移动后才接受点击，指针离开后退回透明；宠物可见形象始终接受
+    // 鼠标；用户主动展开的面板出现即可点击。指针位置与延时任务都
+    // 做成可注入依赖，行为级测试不依赖真实鼠标与真实计时。
+    // ══════════════════════════════════════════════════════════════
+    /// 延时任务调度器（可注入）：生产走主队列定时器，测试注入手动时钟
+    private let delayedWorkScheduler: DetachedIslandDelayedWorkScheduling
+    /// 指针位置来源（可注入）：生产接全局鼠标位置流，测试注入可控 subject
+    private let pointerLocationPublisher: AnyPublisher<CGPoint, Never>?
+    /// 指针最近一次已知位置（AppKit 屏幕坐标）
+    private var pointerLocation: CGPoint?
+    /// 当前气泡的展示来源（nil = 气泡隐藏）
+    private var bubblePresentationSource: DetachedIslandBubblePresentationSource?
+    /// 自动展示的面板是否已就绪（指针在面板内移动后才接受点击）
+    private var isAutoPanelReady = false
+    /// 未就绪期间的移动基准位置：面板出现时指针所在处
+    private var autoPanelMovementBaseline: CGPoint?
+    /// present / 拖拽后的交互抑制窗（期间窗口完全不接受鼠标）
+    private var isInteractionSuppressed = false
+    /// 悬停驻留计时（0.6s）
+    private var petHoverActivationToken: DetachedIslandDelayedWorkToken?
+    /// 悬停展开预览的离开宽限计时（1.5s）
+    private var hoverLeaveGraceToken: DetachedIslandDelayedWorkToken?
     private var floatingSettingsHintDismissWorkItem: DispatchWorkItem?
     private var completionNotificationDismissWorkItem: DispatchWorkItem?
     private var delayedManualAttentionWorkItem: DispatchWorkItem?
@@ -210,6 +236,10 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     }
     private var currentEnergyMode: EnergyMode = .quietBackground
     var bubbleHoverGraceDelay: TimeInterval = 3
+    /// 悬停展开预览的离开宽限：指针离开宠物与面板后自动收起
+    var hoverPreviewLeaveGraceDelay: TimeInterval = 1.5
+    /// present / 拖拽后的交互抑制时长（期间窗口完全不接受鼠标）
+    var interactionActivationDelay: TimeInterval = 0.12
     var completionNotificationDismissDelay: TimeInterval = 5
     private var activeCompletionNotification: SessionCompletionNotification? {
         didSet {
@@ -231,7 +261,9 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         energyModePublisher: AnyPublisher<EnergyMode, Never>? = nil,
         shouldSuppressAttentionAutoOpen: @escaping @MainActor () -> Bool = {
             AutoOpenSuppressionPolicy.shouldSuppressAutoOpen(settings: AppSettings.shared)
-        }
+        },
+        pointerLocationPublisher: AnyPublisher<CGPoint, Never>? = nil,
+        delayedWorkScheduler: DetachedIslandDelayedWorkScheduling? = nil
     ) {
         self.viewModel = viewModel
         self.sessionMonitor = sessionMonitor
@@ -240,6 +272,8 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         self.onPetAnchorChanged = onPetAnchorChanged
         self.energyModePublisher = energyModePublisher ?? EnergyGovernor.shared.$mode.eraseToAnyPublisher()
         self.shouldSuppressAttentionAutoOpen = shouldSuppressAttentionAutoOpen
+        self.pointerLocationPublisher = pointerLocationPublisher
+        self.delayedWorkScheduler = delayedWorkScheduler ?? MainQueueDelayedWorkScheduler()
         self.lastAppliedLayout = Self.windowLayout(
             for: viewModel,
             sessionMonitor: sessionMonitor
@@ -321,6 +355,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             // 点击是用户显式动作：必须以 .click 触发呈现——留在
             // .notification 触发会被 resolver 的 attention 抢占
             // 分支偷换内容，点击表现为「无反应」。
+            self?.markBubbleAsUserInitiated()
             self?.dismissActiveCompletionNotification(closeBubble: false, advanceQueue: true)
             self?.viewModel.presentChat(for: session, reason: .click)
         }
@@ -342,6 +377,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
 
         window.delegate = self
         bindWindowSizeUpdates()
+        bindPointerLocationUpdates()
         primeCompletionNotificationTracking(sessionMonitor.instances)
     }
 
@@ -446,6 +482,8 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     ) {
         lastShowWindowActivatedApplicationForTesting = activatesApplication
         if activatesApplication {
+            // ── T30 激活溯源：显式激活调用点打来源标记 ──────────────
+            FocusTrace.source("detached.showWindow.activate")
             NSApp.activate(ignoringOtherApps: false)
             showWindow(nil)
             window.makeKeyAndOrderFront(nil)
@@ -476,16 +514,16 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     }
 
     func activateInteraction() {
-        interactionActivationWorkItem?.cancel()
+        cancelInteractionActivation()
 
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self, let window = self.window else { return }
-            self.interactionActivationWorkItem = nil
-            window.ignoresMouseEvents = false
+        interactionActivationToken = delayedWorkScheduler.schedule(
+            after: interactionActivationDelay
+        ) { [weak self] in
+            guard let self else { return }
+            self.interactionActivationToken = nil
+            self.isInteractionSuppressed = false
+            self.refreshMouseRouting()
         }
-
-        interactionActivationWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
     }
 
     func updateDragPosition(
@@ -570,7 +608,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             mode: .hoverPreview,
             activeCompletionNotification: activeCompletionNotification
         )
-        applyBubbleStateChange {
+        applyBubbleStateChange(source: .automatic) {
             interactionModel.presentHoverPreview(canPresentBubble: canPresentBubble)
         }
     }
@@ -580,7 +618,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             from: sessionMonitor.instances,
             mode: .pinnedList
         )
-        applyBubbleStateChange {
+        applyBubbleStateChange(source: .userInitiated) {
             interactionModel.togglePinned(canPresentBubble: canPresentBubble)
         }
     }
@@ -597,6 +635,30 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
 
     func simulateBubbleHoverForTesting(_ isHovering: Bool) {
         handleBubbleHoverChanged(isHovering)
+    }
+
+    /// 模拟宠物悬停（生产由 DetachedIslandPanelView 的 onContinuousHover 驱动）
+    func simulatePetHoverForTesting(_ isHovering: Bool) {
+        handlePetHoverChanged(isHovering)
+    }
+
+    /// 面板屏幕矩形（nil = 当前没有面板）
+    var bubbleScreenFrameForTesting: CGRect? {
+        guard let window else { return nil }
+        let rect = screenBubbleFrame(for: window)
+        return rect.isNull ? nil : rect
+    }
+
+    /// 宠物可见形象屏幕矩形（始终接受鼠标）
+    var petVisibleScreenFrameForTesting: CGRect? {
+        guard let window else { return nil }
+        return screenPetVisibleFrame(for: window)
+    }
+
+    /// 宠物命中框屏幕矩形（92×scale，点击/拖拽仍按它命中）
+    var petInteractionScreenFrameForTesting: CGRect? {
+        guard let window else { return nil }
+        return screenPetInteractionFrame(for: window)
     }
 
     func simulateOutsideBubbleClickForTesting(screenLocation: CGPoint) {
@@ -651,21 +713,20 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
 
     func presentCompletionNotificationForTesting(_ notification: SessionCompletionNotification) {
         activeCompletionNotification = notification
-        applyBubbleStateChange {
+        applyBubbleStateChange(source: .automatic) {
             interactionModel.presentHoverPreview(canPresentBubble: true)
         }
         scheduleCompletionNotificationDismissal(for: notification.id)
     }
 
     func dismiss() {
-        interactionActivationWorkItem?.cancel()
-        interactionActivationWorkItem = nil
+        cancelInteractionActivation()
         bubbleVisibilityWorkItem?.cancel()
         bubbleVisibilityWorkItem = nil
         bubbleHoverGraceWorkItem?.cancel()
         bubbleHoverGraceWorkItem = nil
-        petHoverActivationWorkItem?.cancel()
-        petHoverActivationWorkItem = nil
+        cancelPetHoverActivation()
+        cancelHoverLeaveCollapse()
         isPetHovered = false
         floatingSettingsHintDismissWorkItem?.cancel()
         floatingSettingsHintDismissWorkItem = nil
@@ -685,6 +746,11 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         onClose()
         return false
+    }
+
+    // MARK: - T30 激活溯源：窗口成为 key 时记一行
+    func windowDidBecomeKey(_ notification: Notification) {
+        FocusTrace.becameKey(window: "detached")
     }
 
     private func bindWindowSizeUpdates() {
@@ -833,6 +899,186 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             .store(in: &cancellables)
     }
 
+    // ============================================================
+    // MARK: - 指针位置与鼠标路由（T30）
+    //
+    // 指针位置来自全局鼠标位置流（生产：EventMonitors.mouseRouting-
+    // Location；测试：可控 subject，均在主线程送出）。窗口是否接受
+    // 鼠标由纯函数 DetachedIslandMouseRouting 判定：宠物可见形象
+    // 始终接受；面板仅在「就绪」态接受；其余透明区域一律穿透，
+    // 点击与滚轮直接落到下面的窗口。
+    // ============================================================
+    private func bindPointerLocationUpdates() {
+        guard let pointerLocationPublisher else { return }
+
+        pointerLocationPublisher
+            .sink { [weak self] location in
+                self?.handlePointerLocationUpdate(location)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func handlePointerLocationUpdate(_ location: CGPoint) {
+        pointerLocation = location
+        updatePetHoverFromPointerLocation(location)
+        updateAutoPanelReadiness(pointerLocation: location)
+        updateHoverLeaveCollapse(pointerLocation: location)
+        refreshMouseRouting()
+    }
+
+    /// 几何兜底：指针已离开宠物可见形象时按「未悬停」处理
+    ///
+    /// 窗口处于鼠标穿透态时收不到 SwiftUI 的 onHover 退出事件，
+    /// 只靠回调会把「指针已离开」误判成仍在宠物上，驻留计时也就
+    /// 停不下来。
+    private func updatePetHoverFromPointerLocation(_ location: CGPoint) {
+        guard isPetHovered else { return }
+        guard let window else { return }
+        guard !screenPetVisibleFrame(for: window).contains(location) else { return }
+
+        handlePetHoverChanged(false)
+    }
+
+    /// 自动展示面板的就绪态
+    ///
+    /// 面板刚出现时指针恰好停在面板内 → 保持未就绪（这次点击穿透，
+    /// 防误点）；指针在面板内移动达到阈值 → 就绪，开始接受点击；
+    /// 指针离开面板 → 退回未就绪。
+    private func updateAutoPanelReadiness(pointerLocation: CGPoint) {
+        switch bubblePresentationSource {
+        case .userInitiated:
+            isAutoPanelReady = true
+            return
+        case .automatic, .hoverExpanded:
+            break
+        case nil:
+            isAutoPanelReady = false
+            autoPanelMovementBaseline = nil
+            return
+        }
+
+        guard let window else { return }
+        let bubbleRect = screenBubbleFrame(for: window)
+        guard !bubbleRect.isNull else {
+            isAutoPanelReady = false
+            autoPanelMovementBaseline = pointerLocation
+            return
+        }
+
+        if bubbleRect.contains(pointerLocation) {
+            if DetachedIslandMouseRouting.isAutoPanelReady(
+                pointerLocation: pointerLocation,
+                movementBaseline: autoPanelMovementBaseline
+            ) {
+                isAutoPanelReady = true
+            }
+        } else {
+            isAutoPanelReady = false
+            autoPanelMovementBaseline = pointerLocation
+        }
+    }
+
+    /// 悬停展开的预览：指针离开「宠物 + 面板」后自动收起
+    ///
+    /// 只作用于悬停展开态：宠物点击展开（既有 3s 宽限）、钉住列表、
+    /// 拖拽与快捷键路径都不受影响。悬停展开态下也可能显示带按钮的
+    /// 审批/追问卡，因此宽限不低于 1.5s。
+    private func updateHoverLeaveCollapse(pointerLocation: CGPoint) {
+        guard bubblePresentationSource == .hoverExpanded else { return }
+        guard let window else { return }
+
+        let insidePet = screenPetInteractionFrame(for: window).contains(pointerLocation)
+        let bubbleRect = screenBubbleFrame(for: window)
+        let insideBubble = !bubbleRect.isNull && bubbleRect.contains(pointerLocation)
+
+        if insidePet || insideBubble {
+            cancelHoverLeaveCollapse()
+            return
+        }
+
+        scheduleHoverLeaveCollapse()
+    }
+
+    private func scheduleHoverLeaveCollapse() {
+        guard hoverLeaveGraceToken == nil else { return }
+
+        hoverLeaveGraceToken = delayedWorkScheduler.schedule(
+            after: hoverPreviewLeaveGraceDelay
+        ) { [weak self] in
+            guard let self else { return }
+            self.hoverLeaveGraceToken = nil
+            guard self.bubblePresentationSource == .hoverExpanded else { return }
+            self.applyBubbleStateChange {
+                self.interactionModel.hidePinnedBubble()
+            }
+        }
+    }
+
+    private func cancelHoverLeaveCollapse() {
+        hoverLeaveGraceToken?.cancel()
+        hoverLeaveGraceToken = nil
+    }
+
+    /// 按当前指针位置刷新窗口的鼠标接受状态
+    ///
+    /// 失败开放：拿不到指针位置时保持现状（始终接受鼠标），面板绝不
+    /// 会因此点不动。
+    private func refreshMouseRouting() {
+        guard let window else { return }
+        guard window.isVisible else { return }
+
+        if isInteractionSuppressed {
+            window.ignoresMouseEvents = true
+            return
+        }
+
+        // 拖拽期间必须保持可交互，否则宠物拖不动
+        if interactionModel.isPetDragging {
+            window.ignoresMouseEvents = false
+            return
+        }
+
+        guard let pointerLocation else {
+            window.ignoresMouseEvents = false
+            return
+        }
+
+        let acceptsMouse = DetachedIslandMouseRouting.acceptsMouse(
+            at: pointerLocation,
+            petVisibleRect: screenPetVisibleFrame(for: window),
+            bubbleRect: screenBubbleFrame(for: window),
+            bubbleInteractive: isBubbleInteractive
+        )
+        window.ignoresMouseEvents = !acceptsMouse
+    }
+
+    /// 面板当前是否接受点击
+    private var isBubbleInteractive: Bool {
+        switch bubblePresentationSource {
+        case .userInitiated:
+            return true
+        case .automatic, .hoverExpanded:
+            return isAutoPanelReady
+        case nil:
+            return false
+        }
+    }
+
+    /// 标记当前气泡为「用户主动」展示：立即就绪，接受点击
+    private func markBubbleAsUserInitiated() {
+        bubblePresentationSource = .userInitiated
+        isAutoPanelReady = true
+        refreshMouseRouting()
+    }
+
+    /// 宠物可见形象（74×scale）屏幕矩形：始终接受鼠标
+    private func screenPetVisibleFrame(for window: NSWindow) -> CGRect {
+        let hitFrame = screenPetInteractionFrame(for: window)
+        let metrics = DetachedIslandPanelMetrics.petMetrics()
+        let inset = max(0, (metrics.petHitFrame - metrics.petVisualFrame) / 2)
+        return hitFrame.insetBy(dx: inset, dy: inset)
+    }
+
     private func scheduleWindowSizeUpdate() {
         hasPendingWindowSizeUpdate = true
         guard !isWindowSizeUpdateScheduled else { return }
@@ -894,6 +1140,8 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         window.setFrame(targetFrame, display: false, animate: false)
         isApplyingWindowSizeUpdate = false
         lastAppliedLayout = newLayout
+        // 窗口 frame 变了：面板区域随之变化，重新判定鼠标路由
+        refreshMouseRouting()
 
         if hasPendingWindowSizeUpdate {
             scheduleWindowSizeUpdate()
@@ -1115,12 +1363,13 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
 
     private func suppressInteraction() {
         cancelInteractionActivation()
+        isInteractionSuppressed = true
         window?.ignoresMouseEvents = true
     }
 
     private func cancelInteractionActivation() {
-        interactionActivationWorkItem?.cancel()
-        interactionActivationWorkItem = nil
+        interactionActivationToken?.cancel()
+        interactionActivationToken = nil
     }
 
     private func handlePetMouseDown(_ event: NSEvent) -> Bool {
@@ -1287,13 +1536,68 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         )
     }
 
-    private func applyBubbleStateChange(_ change: () -> Void) {
+    /// 变更气泡状态
+    ///
+    /// - Parameters:
+    ///   - source: 气泡出现的原因，决定面板是否已就绪（是否立即
+    ///     接受点击）；nil 表示不改变来源（收起或内容换卡）。
+    ///   - change: 对 DetachedIslandInteractionModel 的状态变更。
+    ///
+    /// `source` 放在闭包之前：`applyBubbleStateChange(source: .automatic) { … }`
+    /// 的尾随闭包才能前向匹配到最后一个参数。
+    private func applyBubbleStateChange(
+        source: DetachedIslandBubblePresentationSource? = nil,
+        _ change: () -> Void
+    ) {
         let previousState = interactionModel.bubbleState
         change()
-        syncBubblePresentation(to: interactionModel.bubbleState)
+        let currentState = interactionModel.bubbleState
+
+        updateBubblePresentationSource(
+            from: previousState,
+            to: currentState,
+            source: source
+        )
+
+        syncBubblePresentation(to: currentState)
         syncOutsideClickMonitor()
         reconcileHighlightedSessionState()
-        recordBubbleTelemetryTransition(from: previousState, to: interactionModel.bubbleState)
+        recordBubbleTelemetryTransition(from: previousState, to: currentState)
+        // 气泡出现/收起都会改变面板区域：重新判定鼠标路由
+        refreshMouseRouting()
+    }
+
+    /// 维护气泡展示来源与就绪态
+    ///
+    /// 面板「新出现」时按来源重置就绪态：用户主动 → 立即就绪；自动展示 →
+    /// 未就绪（指针在面板内移动后才接受点击）。面板已在屏上时内容换卡
+    /// 不夺回鼠标：就绪态只由指针位置决定。
+    private func updateBubblePresentationSource(
+        from previousState: DetachedIslandBubbleState,
+        to currentState: DetachedIslandBubbleState,
+        source: DetachedIslandBubblePresentationSource?
+    ) {
+        guard currentState != .hidden else {
+            bubblePresentationSource = nil
+            isAutoPanelReady = false
+            autoPanelMovementBaseline = nil
+            cancelHoverLeaveCollapse()
+            return
+        }
+
+        guard let source else { return }
+
+        bubblePresentationSource = source
+
+        guard previousState == .hidden else { return }
+
+        switch source {
+        case .userInitiated:
+            isAutoPanelReady = true
+        case .automatic, .hoverExpanded:
+            isAutoPanelReady = false
+        }
+        autoPanelMovementBaseline = pointerLocation
     }
 
     private var shouldDimForQuietBackground: Bool {
@@ -1382,7 +1686,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         )
         let previousBubbleState = interactionModel.bubbleState
 
-        applyBubbleStateChange {
+        applyBubbleStateChange(source: .userInitiated) {
             interactionModel.togglePrimaryBubble(
                 canPresentPreview: canPresentPreview,
                 canPresentPinnedBubble: canPresentPinnedBubble
@@ -1398,6 +1702,10 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     private func presentExistingAttentionIfNeeded() {
         guard !shouldSuppressAttentionAutoOpen() else { return }
         guard interactionModel.bubbleState != .pinned else { return }
+        // ── T30：自动触发不得带出对话面板 ──────────────────────────
+        // 用户点完成气泡进对话后 contentType 会停在 .chat；此时任何
+        // 自动触发（审批追问展开）都不得把整块对话面板自动弹出来。
+        guard case .instances = viewModel.contentType else { return }
         guard DetachedIslandContentModel.canPresentBubble(
             from: sessionMonitor.instances,
             mode: .hoverPreview,
@@ -1411,7 +1719,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             return
         }
 
-        applyBubbleStateChange {
+        applyBubbleStateChange(source: .automatic) {
             interactionModel.presentHoverPreview(canPresentBubble: true)
         }
     }
@@ -1547,7 +1855,11 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         guard interactionModel.bubbleState != .hidden,
               let window else { return }
 
-        if screenBubbleFrame(for: window).contains(eventLocation) {
+        // 就绪面板内部的点击由面板自己消费，不会走到这里；
+        // 未就绪面板（自动展示且指针未动过）的点击会穿透到别的 App，
+        // 同样按「点了外面」收起，避免面板一直压在别人的工作区上。
+        if isBubbleInteractive,
+           screenBubbleFrame(for: window).contains(eventLocation) {
             return
         }
 
@@ -1613,9 +1925,11 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
     private func schedulePetHoverActivation() {
         cancelPetHoverActivation()
 
-        let workItem = DispatchWorkItem { [weak self] in
+        petHoverActivationToken = delayedWorkScheduler.schedule(
+            after: DetachedIslandPanelMetrics.petHoverActivationDelay
+        ) { [weak self] in
             guard let self else { return }
-            self.petHoverActivationWorkItem = nil
+            self.petHoverActivationToken = nil
             guard self.isPetHovered else { return }
             guard DetachedIslandContentModel.shouldPresentPetHoverPreview(
                 bubbleState: self.interactionModel.bubbleState,
@@ -1623,6 +1937,8 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             ) else {
                 return
             }
+            // ── T30：自动触发不得带出对话面板 ──────────────────────
+            guard case .instances = self.viewModel.contentType else { return }
 
             let canPresentBubble = DetachedIslandContentModel.canPresentBubble(
                 from: self.sessionMonitor.instances,
@@ -1631,21 +1947,15 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             )
             guard canPresentBubble else { return }
 
-            self.applyBubbleStateChange {
+            self.applyBubbleStateChange(source: .hoverExpanded) {
                 self.interactionModel.presentHoverPreview(canPresentBubble: true)
             }
         }
-
-        petHoverActivationWorkItem = workItem
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + DetachedIslandPanelMetrics.petHoverActivationDelay,
-            execute: workItem
-        )
     }
 
     private func cancelPetHoverActivation() {
-        petHoverActivationWorkItem?.cancel()
-        petHoverActivationWorkItem = nil
+        petHoverActivationToken?.cancel()
+        petHoverActivationToken = nil
     }
 
     private func scheduleBubbleHoverGraceTimer() {
@@ -1872,7 +2182,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             return
         }
         activeCompletionNotification = nextNotification
-        applyBubbleStateChange {
+        applyBubbleStateChange(source: .automatic) {
             interactionModel.presentHoverPreview(canPresentBubble: true)
         }
         scheduleCompletionNotificationDismissal(for: nextNotification.id)

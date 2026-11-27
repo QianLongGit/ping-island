@@ -22,6 +22,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Touch the settings store early so the bridge runtime config is on disk
         // before any hook fires.
         _ = AppSettings.shared
+        // ── T30 激活溯源：App 被激活时记事件类型与调用栈 ──────────────
+        // 只在状态跃迁时记一行；排查「谁把 Ping Island 拉到前台」时读
+        // category == "FocusTrace" 即可，不用再靠推测。
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidBecomeActiveForFocusTrace(_:)),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
 #if APP_STORE
         HookInstaller.restoreAppStoreHookDirectoryAuthorizationIfAvailable()
 #endif
@@ -210,6 +219,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await TelemetryService.shared.stop()
         }
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+
+    /// T30 激活溯源：应用被激活（事件类型 + 触发栈落到 FocusTrace）
+    @objc private func applicationDidBecomeActiveForFocusTrace(_ notification: Notification) {
+        FocusTrace.activation(source: "app")
     }
     private func ensureSingleInstance() -> Bool {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.wudanwu.PingIsland"

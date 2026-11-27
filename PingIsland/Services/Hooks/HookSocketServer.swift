@@ -95,6 +95,11 @@ struct HookEvent: Sendable {
     /// 转发管线的时刻）。本地路径恒为 nil，语义等价于"总是新鲜"，
     /// 既有本地提示行为分毫不变。
     let occurredAt: Date?
+    /// 回放标记（Task 31 · F8 / F2）：该事件在本次远程握手之前就已发生
+    /// （已归一化的 occurredAt 早于端点 lastConnectedAt），或对端 bridge
+    /// 支持时间戳却没有带戳（必为旧 bridge 写下的 outbox 积压）。回放
+    /// 事件照常更新状态，但不产生任何提示类副作用。本地事件恒为 false。
+    let isReplay: Bool
 
     nonisolated init(
         sessionId: String,
@@ -116,7 +121,8 @@ struct HookEvent: Sendable {
         suppressInAppPrompt: Bool = false,
         codexBypassPermissions: Bool = false,
         conversationTitle: String? = nil,
-        occurredAt: Date? = nil
+        occurredAt: Date? = nil,
+        isReplay: Bool = false
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
@@ -138,6 +144,7 @@ struct HookEvent: Sendable {
         self.codexBypassPermissions = codexBypassPermissions
         self.conversationTitle = conversationTitle
         self.occurredAt = occurredAt
+        self.isReplay = isReplay
     }
 
     nonisolated var sessionPhase: SessionPhase {
@@ -336,7 +343,11 @@ extension HookEvent {
             bridgeIntervention: bridgeIntervention?.withResolvedToolUseId(toolUseId),
             bridgeExpectsResponse: bridgeExpectsResponse,
             suppressInAppPrompt: suppressInAppPrompt,
-            codexBypassPermissions: codexBypassPermissions
+            codexBypassPermissions: codexBypassPermissions,
+            // Task 31：派生事件必须带上原事件的时间戳与回放标记，
+            // 否则远程事件一经重建就退化成「实时事件」。
+            occurredAt: occurredAt,
+            isReplay: isReplay
         )
     }
 
@@ -359,7 +370,11 @@ extension HookEvent {
             bridgeIntervention: bridgeIntervention,
             bridgeExpectsResponse: bridgeExpectsResponse,
             suppressInAppPrompt: suppressInAppPrompt,
-            codexBypassPermissions: codexBypassPermissions
+            codexBypassPermissions: codexBypassPermissions,
+            // Task 31：派生事件必须带上原事件的时间戳与回放标记，
+            // 否则远程事件一经重建就退化成「实时事件」。
+            occurredAt: occurredAt,
+            isReplay: isReplay
         )
     }
 }

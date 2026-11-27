@@ -55,8 +55,30 @@ struct SessionSoundEdgeTracker {
     private var sequence: UInt64 = 0
     private var hasPrimed = false
 
-    init(retainedSessionLimit: Int = 512) {
+    // ─────────────────────────────────────────────────
+    // 提示洪峰治理状态（Task 31）
+    // ─────────────────────────────────────────────────
+    /// 冷却时钟与启动期「首次发现」窗口的起点（默认即创建时刻）
+    private let startedAt: Date
+    /// 最近一次实际发声的完成边沿时刻（F4）
+    private var lastCompletionSoundAt: Date?
+    /// 自上次完成发声以来被冷却抑制的完成数（仅用于决策日志）
+    private var cooldownSuppressedCount = 0
+    /// 决策日志出口（Task 31 · F6），可注入以便单测
+    private let trace: (String) -> Void
+    /// 节流开关（冷却 / 首次发现）；回放闸门不受它影响
+    private let isPacingEnabled: Bool
+
+    init(
+        retainedSessionLimit: Int = 512,
+        pacingEnabled: Bool = NotificationPacing.isPacingEnabledByDefault,
+        startedAt: Date = Date(),
+        trace: @escaping (String) -> Void = { NotifyTrace.emit($0) }
+    ) {
         self.retainedSessionLimit = max(1, retainedSessionLimit)
+        self.isPacingEnabled = pacingEnabled
+        self.startedAt = startedAt
+        self.trace = trace
     }
 
     var isPrimed: Bool { hasPrimed }
@@ -72,12 +94,22 @@ struct SessionSoundEdgeTracker {
     /// Record `sessions` and return the single sound edge they crossed, if any.
     ///
     /// ══════════════════════════════════════════════════════════════════
-    /// 远程回放新鲜度闸门（Task 28）：边沿只统计"新鲜"的会话——
-    /// `lastEventOccurredAt` 滞后超过阈值的远程会话（离线 outbox 回放）
-    /// 不进入任何边沿桶，由纯过期事件引起的状态跃变整体静默。
-    /// `absorb` 无条件执行：过期会话的 completionKey 照常登记，
-    /// 后续同一完成键的重放不会重复响。occurredAt 缺席（本地事件/
-    /// 旧 bridge）恒为新鲜，实时提示分毫不变。
+    /// 提示闸门（只压提示，不改状态记录）：
+    ///
+    /// - 过期（Task 28）：`lastEventOccurredAt` 滞后超过阈值的远程会话
+    ///   （离线 outbox 回放）不进入任何边沿桶。
+    /// - 回放（Task 31 · F8）：`lastEventIsReplay` 的会话不产生完成 /
+    ///   churn 类边沿——断连重连后整批积压把会话重新置为 connected，
+    ///   不再被读成 processingStarted / sessionStarted / taskCompleted。
+    ///   例外是 attention：尚未答复的审批 / 追问在重连后仍需提醒，只受
+    ///   上面的 120 秒过期闸门约束，绝不被无声吞掉。
+    /// - 冷却（Task 31 · F4）：完成边沿全局 2 秒冷却，attention /
+    ///   干预类严重度更高、天然插队。
+    /// - 首次发现（Task 31 · F5）：启动后 5 秒内首次发现、且一出现就是
+    ///   完成态的本地会话不响（列表发现，不是真实完成）。
+    ///
+    /// `absorb` 无条件执行：被压掉的 completionKey 照常登记，后续同一
+    /// 完成键的重放不会重复响。
     /// ══════════════════════════════════════════════════════════════════
     mutating func edge(for sessions: [SessionState], now: Date = Date()) -> Edge? {
         guard hasPrimed else {
@@ -92,17 +124,36 @@ struct SessionSoundEdgeTracker {
         var processingSessions: [SessionState] = []
         let connectedSessions = sessions.filter { $0.connectionState == .connected }
         let notificationFresh = connectedSessions.filter { $0.hasFreshNotificationActivity(now: now) }
-        let newSessions = notificationFresh.filter { records[$0.stableId] == nil }
-        let rapidSubmitSessions = rapidSubmitTracker.observe(notificationFresh)
+        // ── 逐会话静默原因：回放（F8 / F2）或启动期首次发现（F5）。
+        //    被静默的会话不进任何边沿桶（「只登记状态」），避免完成边沿
+        //    被压掉后又以 sessionStarted 的形式响出来。attention 例外。──
+        var silenceReasons: [String: NotifySuppressReason] = [:]
+        for session in notificationFresh {
+            if case .suppress(let reason) = NotificationPacing.completionSoundDecision(
+                isReplay: session.lastEventIsReplay,
+                isRemote: session.ingress == .remoteBridge,
+                isFirstDiscovery: records[session.stableId] == nil,
+                trackerStartedAt: startedAt,
+                now: now,
+                isPacingEnabled: isPacingEnabled
+            ) {
+                silenceReasons[session.stableId] = reason
+            }
+        }
+        let liveSessions = notificationFresh.filter { silenceReasons[$0.stableId] == nil }
+        let newSessions = liveSessions.filter { records[$0.stableId] == nil }
+        let rapidSubmitSessions = rapidSubmitTracker.observe(liveSessions)
 
         for session in notificationFresh {
             let previous = records[session.stableId]?.snapshot
             let current = Snapshot(session)
+            let silenceReason = silenceReasons[session.stableId]
 
-            if !current.errorToolIDs.subtracting(previous?.errorToolIDs ?? []).isEmpty {
+            if silenceReason == nil,
+               !current.errorToolIDs.subtracting(previous?.errorToolIDs ?? []).isEmpty {
                 errorSessions.append(session)
             }
-            if current.isResourceLimited, previous?.isResourceLimited != true {
+            if silenceReason == nil, current.isResourceLimited, previous?.isResourceLimited != true {
                 resourceLimitSessions.append(session)
             }
             if current.needsAttention, previous?.needsAttention != true {
@@ -110,37 +161,89 @@ struct SessionSoundEdgeTracker {
             }
             if let completionKey = current.completionKey,
                !playedCompletionKeys.contains(completionKey) {
-                completedSessions.append(session)
+                if let silenceReason {
+                    trace(line(session, .suppress(silenceReason), now: now))
+                } else {
+                    completedSessions.append(session)
+                }
             }
-            if current.isProcessing, previous?.isProcessing != true {
+            if silenceReason == nil, current.isProcessing, previous?.isProcessing != true {
                 processingSessions.append(session)
             }
         }
 
         absorb(sessions)
 
+        // ── F4 完成声音冷却：窗口内不响，状态已由 absorb 记录 ──
+        if isPacingEnabled, !completedSessions.isEmpty {
+            if NotificationPacing.isCompletionSoundCoolingDown(
+                lastPlayedAt: lastCompletionSoundAt,
+                now: now
+            ) {
+                cooldownSuppressedCount += completedSessions.count
+                for session in completedSessions {
+                    trace(line(session, .suppress(.cooldown), now: now))
+                }
+                // 完成边沿优先级高于 sessionStarted 等低阶边沿：被冷却
+                // 压掉后不再顺延给它们，否则冷却窗口里仍有声音。
+                return nil
+            } else {
+                lastCompletionSoundAt = now
+            }
+        }
+
+        let edge: Edge?
         if !errorSessions.isEmpty {
-            return Edge(event: .taskError, sessions: errorSessions)
+            edge = Edge(event: .taskError, sessions: errorSessions)
+        } else if !resourceLimitSessions.isEmpty {
+            edge = Edge(event: .resourceLimit, sessions: resourceLimitSessions)
+        } else if !attentionSessions.isEmpty {
+            edge = Edge(event: .attentionRequired, sessions: attentionSessions)
+        } else if !completedSessions.isEmpty {
+            edge = Edge(event: .taskCompleted, sessions: completedSessions)
+        } else if !newSessions.isEmpty {
+            edge = Edge(event: .sessionStarted, sessions: newSessions)
+        } else if !processingSessions.isEmpty {
+            edge = Edge(event: .processingStarted, sessions: processingSessions)
+        } else if !rapidSubmitSessions.isEmpty {
+            edge = Edge(event: .rapidSubmit, sessions: rapidSubmitSessions)
+        } else {
+            edge = nil
         }
-        if !resourceLimitSessions.isEmpty {
-            return Edge(event: .resourceLimit, sessions: resourceLimitSessions)
+        if let edge {
+            trace(NotificationPacing.decisionLine(
+                surface: .sound,
+                sessionID: edge.sessions.first?.sessionId ?? "",
+                kind: String(describing: edge.event),
+                decision: .notify,
+                occurredAt: nil,
+                now: now,
+                suppressedCount: edge.event == .taskCompleted ? cooldownSuppressedCount : 0
+            ))
+            if edge.event == .taskCompleted {
+                cooldownSuppressedCount = 0
+            }
         }
-        if !attentionSessions.isEmpty {
-            return Edge(event: .attentionRequired, sessions: attentionSessions)
-        }
-        if !completedSessions.isEmpty {
-            return Edge(event: .taskCompleted, sessions: completedSessions)
-        }
-        if !newSessions.isEmpty {
-            return Edge(event: .sessionStarted, sessions: newSessions)
-        }
-        if !processingSessions.isEmpty {
-            return Edge(event: .processingStarted, sessions: processingSessions)
-        }
-        if !rapidSubmitSessions.isEmpty {
-            return Edge(event: .rapidSubmit, sessions: rapidSubmitSessions)
-        }
-        return nil
+        return edge
+    }
+
+    // ─────────────────────────────────────────────────
+    // 决策日志行（Task 31 · F6）：kind 取完成卡语义的 completed
+    // ─────────────────────────────────────────────────
+    private func line(
+        _ session: SessionState,
+        _ decision: NotifyDecision,
+        now: Date
+    ) -> String {
+        NotificationPacing.decisionLine(
+            surface: .sound,
+            sessionID: session.sessionId,
+            kind: "completed",
+            decision: decision,
+            occurredAt: session.lastEventOccurredAt,
+            now: now,
+            suppressedCount: cooldownSuppressedCount
+        )
     }
 
     private mutating func absorb(_ sessions: [SessionState]) {

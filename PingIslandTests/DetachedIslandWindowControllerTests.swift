@@ -2412,6 +2412,391 @@ final class DetachedIslandWindowControllerTests: XCTestCase {
         XCTAssertEqual(collapsedAnchor.y, expandedAnchor.y, accuracy: 0.5)
     }
 
+    // ══════════════════════════════════════════════════════════════
+    // MARK: - T30 自动弹出不拦鼠标、不抢焦点
+    //
+    // 指针位置与时间全部可注入：pointer 是可控 subject，scheduler
+    // 是手动时钟；断言的是真实窗口状态（window.ignoresMouseEvents /
+    // isKeyWindow）与真实路由，不是参数默认值。
+    // ══════════════════════════════════════════════════════════════
+
+    /// 构造带可注入指针与时钟的控制器，并走完 present + 交互抑制窗
+    private func makeRoutedController(
+        sessions: [SessionState],
+        pointer: CurrentValueSubject<CGPoint, Never>,
+        scheduler: ManualDelayedWorkScheduler
+    ) -> DetachedIslandWindowController {
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        sessionMonitor.instances = sessions
+
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            onClose: {},
+            pointerLocationPublisher: pointer.eraseToAnyPublisher(),
+            delayedWorkScheduler: scheduler
+        )
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220), activatesApplication: false)
+        controller.activateInteraction()
+        // present 后 0.12s 的交互抑制窗结束，鼠标路由开始生效
+        scheduler.advance(by: 0.12)
+        return controller
+    }
+
+    /// 指针停在远处（既不在宠物上也不在面板上）
+    private var farAwayPointerLocation: CGPoint { CGPoint(x: 10, y: 10) }
+
+    func testAutomaticCompletionBubbleIsMouseTransparentUntilPointerMovesInside() throws {
+        let pointer = CurrentValueSubject<CGPoint, Never>(farAwayPointerLocation)
+        let scheduler = ManualDelayedWorkScheduler()
+        let completed = makeCompletedSession(id: "completed")
+        let controller = makeRoutedController(
+            sessions: [completed],
+            pointer: pointer,
+            scheduler: scheduler
+        )
+        defer { controller.dismiss() }
+        let window = try XCTUnwrap(controller.window)
+
+        // 自动展示完成气泡
+        controller.presentCompletionNotificationForTesting(
+            SessionCompletionNotification(session: completed, kind: .completed)
+        )
+        XCTAssertEqual(controller.renderedBubbleStateForTesting, .hoverPreview)
+        XCTAssertTrue(window.ignoresMouseEvents, "自动弹出的面板出现时必须对鼠标透明")
+
+        // 指针在面板区域内移动
+        let bubbleFrame = try XCTUnwrap(controller.bubbleScreenFrameForTesting)
+        pointer.send(CGPoint(x: bubbleFrame.midX, y: bubbleFrame.midY))
+        XCTAssertFalse(window.ignoresMouseEvents, "指针在面板内移动后应接受点击")
+
+        // 指针离开面板
+        pointer.send(farAwayPointerLocation)
+        XCTAssertTrue(window.ignoresMouseEvents, "指针离开面板后应退回透明")
+    }
+
+    func testAutomaticPanelStaysTransparentWhenPointerWasAlreadyInsideAtAppearance() throws {
+        let pointer = CurrentValueSubject<CGPoint, Never>(farAwayPointerLocation)
+        let scheduler = ManualDelayedWorkScheduler()
+        let controller = makeRoutedController(
+            sessions: [makeSession(id: "active", phase: .processing)],
+            pointer: pointer,
+            scheduler: scheduler
+        )
+        defer { controller.dismiss() }
+        let window = try XCTUnwrap(controller.window)
+
+        // 先展开一次拿到面板位置，再收起
+        controller.presentHoverBubbleForTesting()
+        let bubbleFrame = try XCTUnwrap(controller.bubbleScreenFrameForTesting)
+        controller.hideBubbleForTesting()
+
+        // 指针预先停在面板位置上：面板再次出现时指针已在面板内
+        pointer.send(CGPoint(x: bubbleFrame.midX, y: bubbleFrame.midY))
+        controller.presentHoverBubbleForTesting()
+        XCTAssertEqual(controller.renderedBubbleStateForTesting, .hoverPreview)
+        XCTAssertTrue(
+            window.ignoresMouseEvents,
+            "面板刚出现时指针恰好在面板内：保持未就绪，这次点击必须穿透（防误点）"
+        )
+
+        // 指针真的动了（仍在面板内）
+        let appearedFrame = try XCTUnwrap(controller.bubbleScreenFrameForTesting)
+        pointer.send(CGPoint(x: appearedFrame.midX + 12, y: appearedFrame.midY))
+        XCTAssertFalse(window.ignoresMouseEvents, "指针在面板内移动后才接受点击")
+    }
+
+    func testPetTapExpandsPanelThatIsClickableImmediately() throws {
+        let pointer = CurrentValueSubject<CGPoint, Never>(farAwayPointerLocation)
+        let scheduler = ManualDelayedWorkScheduler()
+        let controller = makeRoutedController(
+            sessions: [makeSession(id: "active", phase: .processing)],
+            pointer: pointer,
+            scheduler: scheduler
+        )
+        defer { controller.dismiss() }
+        let window = try XCTUnwrap(controller.window)
+
+        // 先展开一次拿到面板位置，再收起
+        controller.simulatePetTapForTesting()
+        let bubbleFrame = try XCTUnwrap(controller.bubbleScreenFrameForTesting)
+        controller.simulatePetTapForTesting()
+
+        // 指针停在面板位置上不动
+        pointer.send(CGPoint(x: bubbleFrame.midX, y: bubbleFrame.midY))
+        XCTAssertTrue(window.ignoresMouseEvents, "没有面板时该位置是透明的")
+
+        // 用户主动展开（点宠物）：指针没动过，面板也必须立即可点
+        controller.simulatePetTapForTesting()
+        XCTAssertEqual(controller.renderedBubbleStateForTesting, .hoverPreview)
+        XCTAssertFalse(window.ignoresMouseEvents, "用户主动展开的面板出现即可点击")
+    }
+
+    func testPetVisibleShapeAcceptsMouseWhileHitFrameDeadZonePassesThrough() throws {
+        let pointer = CurrentValueSubject<CGPoint, Never>(farAwayPointerLocation)
+        let scheduler = ManualDelayedWorkScheduler()
+        let controller = makeRoutedController(sessions: [], pointer: pointer, scheduler: scheduler)
+        defer { controller.dismiss() }
+        let window = try XCTUnwrap(controller.window)
+        let visibleFrame = try XCTUnwrap(controller.petVisibleScreenFrameForTesting)
+        let hitFrame = try XCTUnwrap(controller.petInteractionScreenFrameForTesting)
+
+        pointer.send(CGPoint(x: visibleFrame.midX, y: visibleFrame.midY))
+        XCTAssertFalse(window.ignoresMouseEvents, "宠物可见形象内始终接受鼠标")
+
+        // 死区：命中框内、可见形象外（92 与 74 之间）
+        let deadZoneX = (hitFrame.minX + visibleFrame.minX) / 2
+        pointer.send(CGPoint(x: deadZoneX, y: hitFrame.midY))
+        XCTAssertTrue(window.ignoresMouseEvents, "命中框死区（92 与 74 之间）必须穿透")
+    }
+
+    func testPetHoverDwellShortOfThresholdDoesNotTriggerPreview() throws {
+        let pointer = CurrentValueSubject<CGPoint, Never>(farAwayPointerLocation)
+        let scheduler = ManualDelayedWorkScheduler()
+        let controller = makeRoutedController(
+            sessions: [makeSession(id: "active", phase: .processing)],
+            pointer: pointer,
+            scheduler: scheduler
+        )
+        defer { controller.dismiss() }
+        let petVisibleFrame = try XCTUnwrap(controller.petVisibleScreenFrameForTesting)
+
+        pointer.send(CGPoint(x: petVisibleFrame.midX, y: petVisibleFrame.midY))
+        controller.simulatePetHoverForTesting(true)
+
+        scheduler.advance(by: 0.24)
+        XCTAssertEqual(controller.renderedBubbleStateForTesting, .hidden, "停留 0.24s 不触发悬停预览")
+
+        scheduler.advance(by: 0.36)
+        XCTAssertEqual(controller.renderedBubbleStateForTesting, .hoverPreview, "停留 0.6s 触发悬停预览")
+    }
+
+    func testLeavingPetBeforeDwellCancelsPendingPreview() throws {
+        let pointer = CurrentValueSubject<CGPoint, Never>(farAwayPointerLocation)
+        let scheduler = ManualDelayedWorkScheduler()
+        let controller = makeRoutedController(
+            sessions: [makeSession(id: "active", phase: .processing)],
+            pointer: pointer,
+            scheduler: scheduler
+        )
+        defer { controller.dismiss() }
+        let petVisibleFrame = try XCTUnwrap(controller.petVisibleScreenFrameForTesting)
+
+        pointer.send(CGPoint(x: petVisibleFrame.midX, y: petVisibleFrame.midY))
+        controller.simulatePetHoverForTesting(true)
+        scheduler.advance(by: 0.3)
+
+        // 窗口穿透时收不到 SwiftUI 的悬停退出事件，靠指针位置几何兜底
+        pointer.send(farAwayPointerLocation)
+        scheduler.advance(by: 1.0)
+
+        XCTAssertEqual(controller.renderedBubbleStateForTesting, .hidden, "指针离开后未触发的驻留计时必须取消")
+    }
+
+    func testHoverExpandedPreviewCollapsesAfterPointerLeavesForLongerThanGrace() throws {
+        let pointer = CurrentValueSubject<CGPoint, Never>(farAwayPointerLocation)
+        let scheduler = ManualDelayedWorkScheduler()
+        let controller = makeRoutedController(
+            sessions: [makeSession(id: "active", phase: .processing)],
+            pointer: pointer,
+            scheduler: scheduler
+        )
+        defer { controller.dismiss() }
+        let petVisibleFrame = try XCTUnwrap(controller.petVisibleScreenFrameForTesting)
+        let onPet = CGPoint(x: petVisibleFrame.midX, y: petVisibleFrame.midY)
+
+        pointer.send(onPet)
+        controller.simulatePetHoverForTesting(true)
+        scheduler.advance(by: 0.6)
+        XCTAssertEqual(controller.renderedBubbleStateForTesting, .hoverPreview)
+
+        // 宽限内回到宠物：不收起
+        pointer.send(farAwayPointerLocation)
+        scheduler.advance(by: 1.0)
+        pointer.send(onPet)
+        scheduler.advance(by: 5.0)
+        XCTAssertTrue(controller.isBubbleVisibleForTesting, "宽限内回到宠物不应收起")
+
+        // 离开超过宽限：收起
+        pointer.send(farAwayPointerLocation)
+        scheduler.advance(by: 1.0)
+        XCTAssertTrue(controller.isBubbleVisibleForTesting, "宽限未到不应收起")
+        scheduler.advance(by: 0.6)
+        XCTAssertFalse(controller.isBubbleVisibleForTesting, "离开超过 1.5s 宽限后应收起")
+        waitForBubbleHidden(controller)
+    }
+
+    func testClickInsideReadyPanelDoesNotCollapseIt() throws {
+        let pointer = CurrentValueSubject<CGPoint, Never>(farAwayPointerLocation)
+        let scheduler = ManualDelayedWorkScheduler()
+        let controller = makeRoutedController(
+            sessions: [makeSession(id: "active", phase: .processing)],
+            pointer: pointer,
+            scheduler: scheduler
+        )
+        defer { controller.dismiss() }
+
+        // 就绪面板内部的点击由面板自己消费，不收起
+        controller.presentHoverBubbleForTesting()
+        let bubbleFrame = try XCTUnwrap(controller.bubbleScreenFrameForTesting)
+        let insidePanel = CGPoint(x: bubbleFrame.midX + 12, y: bubbleFrame.midY)
+        pointer.send(insidePanel)
+        XCTAssertFalse(controller.window?.ignoresMouseEvents ?? true)
+
+        controller.simulateOutsideBubbleClickForTesting(screenLocation: insidePanel)
+        XCTAssertTrue(controller.isBubbleVisibleForTesting, "就绪面板内部的点击不应收起面板")
+    }
+
+    func testClickInsideUnreadyPanelCollapsesIt() throws {
+        let pointer = CurrentValueSubject<CGPoint, Never>(farAwayPointerLocation)
+        let scheduler = ManualDelayedWorkScheduler()
+        let controller = makeRoutedController(
+            sessions: [makeSession(id: "active", phase: .processing)],
+            pointer: pointer,
+            scheduler: scheduler
+        )
+        defer { controller.dismiss() }
+
+        controller.presentHoverBubbleForTesting()
+        let bubbleFrame = try XCTUnwrap(controller.bubbleScreenFrameForTesting)
+
+        // 未就绪面板上的点击会穿透到别的 App：同样按「点了外面」收起
+        controller.simulateOutsideBubbleClickForTesting(
+            screenLocation: CGPoint(x: bubbleFrame.midX, y: bubbleFrame.midY)
+        )
+        XCTAssertFalse(controller.isBubbleVisibleForTesting, "穿透到别的 App 的点击同样要收起面板")
+    }
+
+    func testAttentionAutoExpansionDoesNotOpenChatPanelWhenContentTypeIsChat() {
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        let chatted = makeSession(id: "chatted", phase: .processing)
+        sessionMonitor.instances = [chatted]
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            onClose: {}
+        )
+        defer { controller.dismiss() }
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220), activatesApplication: false)
+
+        // 残留的对话路由：用户点完成气泡进对话后点了外面收起
+        viewModel.presentChat(for: chatted, reason: .click)
+        guard case .chat = viewModel.contentType else {
+            XCTFail("前置条件：contentType 应为 .chat")
+            return
+        }
+
+        // 新的审批边沿：自动触发
+        let attention = makeSession(
+            id: "attention",
+            phase: .waitingForApproval(
+                PermissionContext(
+                    toolUseId: "tool-1",
+                    toolName: "Bash",
+                    toolInput: nil,
+                    receivedAt: Date()
+                )
+            )
+        )
+        controller.applySessionSnapshotForTesting([chatted, attention])
+
+        XCTAssertEqual(controller.renderedBubbleStateForTesting, .hidden, "自动触发不得带出对话面板")
+        guard case .chat(let current) = viewModel.contentType else {
+            XCTFail("路由不得被自动触发改写")
+            return
+        }
+        XCTAssertEqual(current.sessionId, chatted.sessionId, "展示后路由仍停在原对话")
+    }
+
+    func testPetHoverDoesNotOpenChatPanelWhenContentTypeIsChat() throws {
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        let chatted = makeSession(id: "chatted", phase: .processing)
+        sessionMonitor.instances = [chatted]
+        let pointer = CurrentValueSubject<CGPoint, Never>(farAwayPointerLocation)
+        let scheduler = ManualDelayedWorkScheduler()
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            onClose: {},
+            pointerLocationPublisher: pointer.eraseToAnyPublisher(),
+            delayedWorkScheduler: scheduler
+        )
+        defer { controller.dismiss() }
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220), activatesApplication: false)
+        controller.activateInteraction()
+        scheduler.advance(by: 0.12)
+
+        viewModel.presentChat(for: chatted, reason: .click)
+        let petVisibleFrame = try XCTUnwrap(controller.petVisibleScreenFrameForTesting)
+        pointer.send(CGPoint(x: petVisibleFrame.midX, y: petVisibleFrame.midY))
+        controller.simulatePetHoverForTesting(true)
+        scheduler.advance(by: 1.0)
+
+        XCTAssertEqual(controller.renderedBubbleStateForTesting, .hidden, "悬停不得自动弹出对话面板")
+        XCTAssertEqual(viewModel.contentType, .chat(chatted))
+    }
+
+    func testWithoutPointerSourceWindowKeepsAcceptingMouse() throws {
+        // 失败开放：拿不到指针位置 → 保持现状（始终接受鼠标）
+        let scheduler = ManualDelayedWorkScheduler()
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        sessionMonitor.instances = [makeSession(id: "active", phase: .processing)]
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            onClose: {},
+            delayedWorkScheduler: scheduler
+        )
+        defer { controller.dismiss() }
+        let window = try XCTUnwrap(controller.window)
+
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220), activatesApplication: false)
+        controller.activateInteraction()
+        scheduler.advance(by: 0.12)
+        XCTAssertFalse(window.ignoresMouseEvents, "拿不到指针位置时窗口必须保持接受鼠标")
+
+        controller.presentHoverBubbleForTesting()
+        XCTAssertFalse(window.ignoresMouseEvents, "自动面板在失败开放下不得点不动")
+    }
+
+    func testAutomaticCompletionBubbleChainLeavesWindowNonKey() throws {
+        let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
+        AppSettings.autoOpenCompletionPanel = true
+        defer { AppSettings.autoOpenCompletionPanel = originalAutoOpenCompletionPanel }
+
+        let viewModel = makeViewModel()
+        let sessionMonitor = makeSessionMonitor()
+        sessionMonitor.instances = [makeSession(id: "active", phase: .processing)]
+        let controller = DetachedIslandWindowController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            completionNotificationRegistry: SessionCompletionNotificationRegistry(),
+            onClose: {},
+            shouldSuppressAttentionAutoOpen: { true }
+        )
+        defer { controller.dismiss() }
+        let window = try XCTUnwrap(controller.window)
+
+        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220), activatesApplication: false)
+        XCTAssertFalse(window.isKeyWindow)
+
+        controller.applySessionSnapshotForTesting([makeCompletedSession(id: "completed")])
+
+        let bubblePresented = expectation(description: "completion bubble auto-opens silently")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            XCTAssertEqual(controller.renderedBubbleStateForTesting, .hoverPreview)
+            XCTAssertTrue(controller.isBubbleVisibleForTesting)
+            XCTAssertFalse(window.isKeyWindow, "自动气泡链跑完后窗口不得是 key")
+            bubblePresented.fulfill()
+        }
+
+        wait(for: [bubblePresented], timeout: 1.0)
+    }
+
     private func waitForBubbleHidden(
         _ controller: DetachedIslandWindowController,
         timeout: TimeInterval = 3.0,

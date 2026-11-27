@@ -224,13 +224,13 @@ final class SessionSoundEdgeTrackerTests: XCTestCase {
                 provider: .codex,
                 turnId: "turn-1",
                 assistantItemId: "assistant-1"
-            )])?.event,
+            )], now: reference)?.event,
             .taskCompleted
         )
 
         _ = tracker.edge(for: [
             session(id: "codex", provider: .codex, phase: .processing, latestTurnId: "turn-2")
-        ])
+        ], now: reference.addingTimeInterval(1))
 
         XCTAssertEqual(
             tracker.edge(for: [completedSession(
@@ -238,7 +238,7 @@ final class SessionSoundEdgeTrackerTests: XCTestCase {
                 provider: .codex,
                 turnId: "turn-2",
                 assistantItemId: "assistant-2"
-            )])?.event,
+            )], now: reference.addingTimeInterval(3))?.event,
             .taskCompleted
         )
     }

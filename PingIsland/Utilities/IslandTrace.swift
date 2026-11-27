@@ -120,8 +120,11 @@ private final class IslandTraceFileSink: @unchecked Sendable {
         .appendingPathComponent(".ping-island-debug/island-trace", isDirectory: true)
 
     /// Serial: owns the handle, the current hour, and the prune clock.
-    private let queue = DispatchQueue(label: "com.wudanwu.pingisland.island-trace", qos: .utility)
+    private let queue: DispatchQueue
     private let retentionWindow: TimeInterval
+    /// 本 sink 的落盘目录与文件名前缀（默认即 IslandTrace 时间轴）
+    private let directory: URL
+    private let filePrefix: String
     private let pruneInterval: TimeInterval = 10 * 60
 
     private var handle: FileHandle?
@@ -142,8 +145,15 @@ private final class IslandTraceFileSink: @unchecked Sendable {
         return formatter
     }()
 
-    init(retentionWindow: TimeInterval) {
+    init(
+        retentionWindow: TimeInterval,
+        directory: URL = IslandTraceFileSink.directory,
+        filePrefix: String = "island-trace"
+    ) {
         self.retentionWindow = retentionWindow
+        self.directory = directory
+        self.filePrefix = filePrefix
+        self.queue = DispatchQueue(label: "com.wudanwu.pingisland.\(filePrefix)", qos: .utility)
     }
 
     func append(_ line: String) {
@@ -166,9 +176,9 @@ private final class IslandTraceFileSink: @unchecked Sendable {
         openHourKey = nil
 
         let fileManager = FileManager.default
-        try? fileManager.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let url = Self.directory.appendingPathComponent("island-trace-\(hourKey).log")
+        let url = directory.appendingPathComponent("\(filePrefix)-\(hourKey).log")
         if !fileManager.fileExists(atPath: url.path) {
             fileManager.createFile(atPath: url.path, contents: nil)
         }
@@ -186,7 +196,7 @@ private final class IslandTraceFileSink: @unchecked Sendable {
 
         let fileManager = FileManager.default
         guard let entries = try? fileManager.contentsOfDirectory(
-            at: Self.directory,
+            at: directory,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
         ) else {
@@ -196,7 +206,7 @@ private final class IslandTraceFileSink: @unchecked Sendable {
         let cutoff = now.addingTimeInterval(-retentionWindow)
         for url in entries where url.pathExtension == "log" {
             // Never delete the file currently being written to, whatever its stamp.
-            guard url.lastPathComponent != openHourKey.map({ "island-trace-\($0).log" }) else {
+            guard url.lastPathComponent != openHourKey.map({ "\(filePrefix)-\($0).log" }) else {
                 continue
             }
             let modifiedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
@@ -204,5 +214,71 @@ private final class IslandTraceFileSink: @unchecked Sendable {
             guard let modifiedAt, modifiedAt < cutoff else { continue }
             try? fileManager.removeItem(at: url)
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MARK: - 提示决策追踪（Task 31 · F6）
+//
+// 每次「弹出 / 不弹出 / 响 / 不响」一行，回答"为什么又弹又响"：
+//
+//   log stream --predicate 'subsystem == "com.wudanwu.pingisland" AND category == "NotifyTrace"'
+//
+// 落盘 ~/.ping-island-debug/notify-trace/notify-trace-<小时>.log（3 小时保留）。
+// 行由 NotificationPacing.decisionLine 生成，字段固定：
+//
+//   notify surface=card|sound session=<8位> kind=<事件> decision=notify|suppress
+//         reason=<fresh|原因> lag=<秒>s suppressed=<累计>
+//
+// 写法与 IslandTrace 相同：只记不影响行为，任何文件操作失败都静默。
+// ═══════════════════════════════════════════════════════════════
+nonisolated enum NotifyTrace {
+    private static let logger = Logger(subsystem: "com.wudanwu.pingisland", category: "NotifyTrace")
+    private static let fileSink = IslandTraceFileSink(
+        retentionWindow: IslandTrace.retentionWindow,
+        directory: FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ping-island-debug/notify-trace", isDirectory: true),
+        filePrefix: "notify-trace"
+    )
+    private static let onceLedger = NotifyTraceOnceLedger()
+
+    /// 写一行决策。
+    static func emit(_ line: String) {
+        logger.notice("\(line, privacy: .public)")
+        fileSink.append(line)
+    }
+
+    /// 同一 `key` 只写第一行。
+    static func emitOnce(key: String, _ line: @autoclosure () -> String) {
+        guard onceLedger.markFirstSeen(key) else { return }
+        emit(line())
+    }
+
+    /// 决策日志所在目录。
+    static var traceDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ping-island-debug/notify-trace", isDirectory: true)
+    }
+}
+
+/// 「只写一次」账本：锁保护、容量有界，超容量时淘汰最早的键。
+private final class NotifyTraceOnceLedger: @unchecked Sendable {
+    private static let capacity = 4_096
+    private let lock = NSLock()
+    private var sequence: UInt64 = 0
+    private var stamps: [String: UInt64] = [:]
+
+    /// 首次见到 `key` 返回 true，重复返回 false
+    func markFirstSeen(_ key: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard stamps[key] == nil else { return false }
+        sequence &+= 1
+        stamps[key] = sequence
+        if stamps.count > Self.capacity {
+            let cutoff = sequence &- UInt64(Self.capacity)
+            stamps = stamps.filter { $0.value > cutoff }
+        }
+        return true
     }
 }

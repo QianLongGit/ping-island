@@ -30,6 +30,8 @@ struct ChatView: View {
     @State private var previousHistoryCount: Int = 0
     @State private var isBottomVisible: Bool = true
     @FocusState private var isInputFocused: Bool
+    /// 宿主窗口（由 HostWindowReader 回传），用于判定自动聚焦时用户是否在场
+    @State private var hostWindow: NSWindow?
 
     init(sessionId: String, initialSession: SessionState, sessionMonitor: SessionMonitor, viewModel: NotchViewModel) {
         self.sessionId = sessionId
@@ -225,7 +227,7 @@ struct ChatView: View {
             // Auto-focus input when tmux messaging becomes available
             if canSend && !isInputFocused {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    isInputFocused = true
+                    focusInputForUserPresence()
                 }
             }
         }
@@ -234,11 +236,13 @@ struct ChatView: View {
 
             // Auto-focus input when chat opens and tmux messaging is available
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                if canSendMessages {
-                    isInputFocused = true
-                }
+                focusInputForUserPresence()
             }
         }
+        .background(HostWindowReader { window in
+            // 状态写入放到下一轮：viewDidMoveToWindow 发生在视图更新过程中
+            DispatchQueue.main.async { hostWindow = window }
+        })
     }
 
     // MARK: - Header
@@ -389,6 +393,19 @@ struct ChatView: View {
     /// Inline follow-up is available for native runtime sessions and terminal-backed tmux sessions.
     private var canSendMessages: Bool {
         session.isNativeRuntimeSession || session.supportsTmuxCLIMessaging
+    }
+
+    /// 自动聚焦输入框：只在宿主窗口已是 key 时发出（T30）
+    ///
+    /// 用户点开对话（点完成气泡 / 点会话行）时窗口已因点击成为 key，聚焦
+    /// 照常；自动弹出场景窗口不是 key，不再请求键盘焦点。
+    private func focusInputForUserPresence() {
+        guard ChatInputAutoFocusPolicy.shouldFocus(
+            isHostWindowKey: hostWindow?.isKeyWindow == true,
+            canSendMessages: canSendMessages
+        ) else { return }
+
+        isInputFocused = true
     }
 
     private var messagePlaceholder: String {
@@ -1658,5 +1675,52 @@ struct NewMessagesIndicator: View {
                 isHovering = hovering
             }
         }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+// MARK: - 输入框自动聚焦（T30 · 只在宿主窗口已是 key 时发出）
+//
+// 自动弹出场景下请求 FocusState 可能把窗口拉成 key 并激活应用，
+// 是「主动弹出来的抢占焦点」的一条隐患路径；用户点进对话时窗口
+// 已是 key，聚焦照常。判定写成纯函数，行为级测试直接断言。
+// ══════════════════════════════════════════════════════════════
+
+/// 输入框自动聚焦判定
+enum ChatInputAutoFocusPolicy {
+    /// 宿主窗口已是 key（用户在场）且可发消息时才请求输入焦点
+    static func shouldFocus(isHostWindowKey: Bool, canSendMessages: Bool) -> Bool {
+        isHostWindowKey && canSendMessages
+    }
+}
+
+/// 宿主窗口探针：把承载 SwiftUI 内容的 NSWindow 回传
+///
+/// macOS SwiftUI 没有「宿主窗口是否 key」的 environment 值，只能靠
+/// NSView 的 viewDidMoveToWindow 拿到窗口；探针不参与命中测试。
+private struct HostWindowReader: NSViewRepresentable {
+    let onWindowChange: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> HostWindowReaderView {
+        let view = HostWindowReaderView()
+        view.onWindowChange = onWindowChange
+        return view
+    }
+
+    func updateNSView(_ nsView: HostWindowReaderView, context: Context) {
+        nsView.onWindowChange = onWindowChange
+    }
+}
+
+private final class HostWindowReaderView: NSView {
+    var onWindowChange: ((NSWindow?) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindowChange?(window)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
     }
 }
